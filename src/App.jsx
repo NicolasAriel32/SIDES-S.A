@@ -167,6 +167,52 @@ const normalizeUserInput = (user) => ({
   createdAt: user.createdAt ?? user.created_at ?? new Date().toISOString()
 })
 
+// =================================================================
+// HELPER: NORMALIZACIÓN DE TIMESTAMPS (FIX v5)
+// =================================================================
+// Varias columnas en Supabase son `timestamp without time zone` y se insertan
+// con now() (que devuelve hora UTC del servidor). PostgREST nos las manda
+// como string sin sufijo Z (ej: "2026-05-08 20:45:14.497"), y el constructor
+// `new Date(s)` de JavaScript las interpreta como hora LOCAL del navegador.
+// Resultado: se ven desplazadas N horas (UTC-3 en Argentina).
+//
+// `normalizarFechaUTC` agrega el sufijo Z para que JS la trate como UTC y la
+// formatee correctamente con .toLocaleString('es-AR').
+// =================================================================
+const normalizarFechaUTC = (ts) => {
+  if (!ts) return ts
+  if (typeof ts !== 'string') return ts
+  // Ya tiene zona horaria (Z o ±HH:MM)
+  if (ts.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(ts)) return ts
+  // Forma "YYYY-MM-DD HH:MM:SS.fff" → "YYYY-MM-DDTHH:MM:SS.fffZ"
+  return ts.replace(' ', 'T') + 'Z'
+}
+
+// Helper: mapea fecha Date|string a YYYY-MM-DD en zona Argentina (para filtros)
+const fechaLocalAR = (date) => {
+  const d = (date instanceof Date) ? date : new Date(normalizarFechaUTC(date))
+  if (isNaN(d.getTime())) return null
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(d)
+}
+
+// Helper: dado un timestamp UTC, devuelve el código del turno (M/T/N) según
+// la hora ARGENTINA en la que se generó. Reglas: M 06-14, T 14-22, N 22-06.
+const turnoDeFecha = (date) => {
+  const d = (date instanceof Date) ? date : new Date(normalizarFechaUTC(date))
+  if (isNaN(d.getTime())) return null
+  // Hora local Argentina como número entero
+  const hora = parseInt(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit', hour12: false
+  }).format(d), 10)
+  if (hora >= 6 && hora < 14) return 'M'
+  if (hora >= 14 && hora < 22) return 'T'
+  return 'N'
+}
+
 const dataService = {
 
   // ===== USUARIOS =====
@@ -439,10 +485,13 @@ const dataService = {
     const usuariosMap = await this.getUsersCache()
 
     return (data || []).map(p => {
-      const fechaSenal = p.timestamp_recibida || p.fecha_hora || p.created_at
-      const fechaObj   = fechaSenal ? new Date(fechaSenal) : new Date()
+      // FIX v5: normalizamos a UTC antes de construir el Date, así
+      // .toLocaleTimeString('es-AR') devuelve la hora real de Argentina.
+      const fechaSenalRaw = p.timestamp_recibida || p.fecha_hora || p.created_at
+      const fechaSenal    = normalizarFechaUTC(fechaSenalRaw)
+      const fechaObj      = fechaSenal ? new Date(fechaSenal) : new Date()
       const codigoHumano =
-        `PRB-${fechaObj.toISOString().slice(0,10).replace(/-/g,'')}` +
+        `PRB-${fechaLocalAR(fechaObj).replace(/-/g,'')}` +
         `-${String(p.numero_secuencial || 0).padStart(4, '0')}`
 
       return {
@@ -452,7 +501,7 @@ const dataService = {
         operario:            usuariosMap.get(p.operario_legajo) || p.operario_legajo || '',
         legajoOperario:      p.operario_legajo,
         supervisorLegajo:    p.supervisor_legajo,
-        fecha: fechaObj.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+        fecha: fechaObj.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
         estado:              p.resultado,
         estadoFinal:         p.estado_final,
         caja:                p.numero_caja,
@@ -464,7 +513,8 @@ const dataService = {
         tuvoFalla:           p.tuvo_falla === true,
         esperandoAprobacion: (p.tuvo_falla === true && p.estado_final === 'PENDIENTE_APROBACION'),
         aprobado:            p.timestamp_aprobada !== null && p.timestamp_aprobada !== undefined,
-        timestamp:           p.created_at,
+        timestamp:           normalizarFechaUTC(p.created_at),
+        timestampSenal:      fechaSenal,
         numeroSecuencial:    p.numero_secuencial,
         fechaSenal:          fechaSenal
       }
@@ -632,7 +682,7 @@ const dataService = {
 
     return (data || []).map(e => ({
       ...e,
-      timestamp: e.created_at || e.timestamp,
+      timestamp: normalizarFechaUTC(e.created_at || e.timestamp),
       desc:      e.descripcion,
       usuario:   e.usuario_nombre || e.usuario_legajo,
       hash:      e.hash_evento || ''
@@ -823,9 +873,16 @@ const dataService = {
 
     return (data || []).map(nc => {
       const p = nc.prueba || {}
-      const fechaP = p.timestamp_recibida ? new Date(p.timestamp_recibida) : new Date(nc.created_at)
+      // FIX v5: normalizamos a UTC; antes el desfase era de N horas porque
+      // PostgREST manda timestamps sin Z y JS los parseaba como hora local.
+      const aperturaUTC  = normalizarFechaUTC(nc.timestamp_apertura || nc.created_at)
+      const tomadaUTC    = normalizarFechaUTC(nc.timestamp_analisis)
+      const cierreUTC    = normalizarFechaUTC(nc.timestamp_cierre)
+      const fechaP       = p.timestamp_recibida
+        ? new Date(normalizarFechaUTC(p.timestamp_recibida))
+        : new Date(aperturaUTC)
       const codigoPrueba = p.numero_secuencial
-        ? `PRB-${fechaP.toISOString().slice(0,10).replace(/-/g,'')}-${String(p.numero_secuencial).padStart(4,'0')}`
+        ? `PRB-${fechaLocalAR(fechaP).replace(/-/g,'')}-${String(p.numero_secuencial).padStart(4,'0')}`
         : null
       const supervisorNombre = nc.supervisor_legajo
         ? (usuariosMap.get(nc.supervisor_legajo) || nc.supervisor_legajo)
@@ -846,15 +903,16 @@ const dataService = {
         estado:            nc.estado,
         supervisorLegajo:  nc.supervisor_legajo,
         tomadaPor:         supervisorNombre,
-        tomadaAt:          nc.timestamp_analisis,
+        tomadaAt:          tomadaUTC,
         cerradaPor:        supervisorNombre,
-        cerradaAt:         nc.timestamp_cierre,
+        cerradaAt:         cierreUTC,
         causaRaiz:         nc.causa_raiz,
         causaRaizDetalle:  '',                              // no existe en schema
         accionesTomadas:   nc.acciones_tomadas || [],       // array embebido
         notasCierre:       nc.notas_cierre,
         diasParaCierre:    nc.dias_para_cierre,
-        timestamp:         nc.created_at
+        timestamp:         aperturaUTC,
+        aperturaAt:        aperturaUTC
       }
     })
   },
@@ -2295,6 +2353,349 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
 };
 
 // =================================================================
+// HISTORIAL POR TURNO — calendario + detalle del día (v5)
+// =================================================================
+// Visible solo para supervisor y admin. Permite elegir un día y ver las
+// pruebas y NC de ese día agrupadas en los 3 turnos (M / T / N).
+// Usa hora Argentina (timeZone fijo) para que el filtro coincida con el
+// día calendario que vivió la planta, no con el día UTC del servidor.
+// =================================================================
+
+const TURNOS_INFO = [
+  { codigo: 'M', nombre: 'Mañana', horario: '06:00 – 14:00', icon: Sun },
+  { codigo: 'T', nombre: 'Tarde',  horario: '14:00 – 22:00', icon: Activity },
+  { codigo: 'N', nombre: 'Noche',  horario: '22:00 – 06:00', icon: Moon },
+];
+
+const NOMBRES_MESES = [
+  'enero','febrero','marzo','abril','mayo','junio',
+  'julio','agosto','septiembre','octubre','noviembre','diciembre'
+];
+
+const DIAS_SEMANA = ['D','L','M','M','J','V','S'];
+
+const HistorialPorTurno = ({ t }) => {
+  const hoy = new Date();
+  const [mes, setMes] = useState(hoy.getMonth());
+  const [anio, setAnio] = useState(hoy.getFullYear());
+  // diaSeleccionado: string YYYY-MM-DD (zona AR) o null
+  const [diaSeleccionado, setDiaSeleccionado] = useState(fechaLocalAR(hoy));
+  const [tests, setTests] = useState([]);
+  const [ncs, setNcs] = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      setCargando(true);
+      const [t1, t2] = await Promise.all([
+        dataService.getTests(),
+        dataService.getNCHistory()
+      ]);
+      if (cancelado) return;
+      setTests(t1);
+      setNcs(t2);
+      setCargando(false);
+    })();
+    return () => { cancelado = true; };
+  }, []);
+
+  // Mapa día → cantidad de pruebas y de fallas, para pintar el badge en el calendario.
+  const resumenPorDia = useMemo(() => {
+    const m = new Map();
+    for (const test of tests) {
+      const d = fechaLocalAR(test.timestampSenal || test.timestamp);
+      if (!d) continue;
+      const cur = m.get(d) || { total: 0, fallas: 0 };
+      cur.total += 1;
+      if (test.estado === 'RECHAZADO') cur.fallas += 1;
+      m.set(d, cur);
+    }
+    return m;
+  }, [tests]);
+
+  // Pruebas y NC del día seleccionado, ordenadas por hora y agrupadas por turno.
+  const detalleDelDia = useMemo(() => {
+    if (!diaSeleccionado) return null;
+    const testsDelDia = tests
+      .filter(test => fechaLocalAR(test.timestampSenal || test.timestamp) === diaSeleccionado)
+      .sort((a, b) => new Date(a.timestampSenal || a.timestamp) - new Date(b.timestampSenal || b.timestamp));
+    const ncsDelDia = ncs
+      .filter(nc => fechaLocalAR(nc.aperturaAt || nc.timestamp) === diaSeleccionado);
+
+    const porTurno = { M: [], T: [], N: [] };
+    for (const test of testsDelDia) {
+      const turno = turnoDeFecha(test.timestampSenal || test.timestamp);
+      if (turno && porTurno[turno]) porTurno[turno].push(test);
+    }
+    return { testsDelDia, ncsDelDia, porTurno };
+  }, [diaSeleccionado, tests, ncs]);
+
+  // Construcción de la grilla del mes
+  const grillaCalendario = useMemo(() => {
+    const primerDia = new Date(anio, mes, 1);
+    const offsetInicial = primerDia.getDay(); // 0 = domingo
+    const diasEnMes = new Date(anio, mes + 1, 0).getDate();
+    const celdas = [];
+    for (let i = 0; i < offsetInicial; i++) celdas.push(null);
+    for (let dia = 1; dia <= diasEnMes; dia++) {
+      const isoDia = `${anio}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+      celdas.push({ dia, isoDia });
+    }
+    while (celdas.length % 7 !== 0) celdas.push(null);
+    return celdas;
+  }, [mes, anio]);
+
+  const cambiarMes = (delta) => {
+    let nuevoMes = mes + delta;
+    let nuevoAnio = anio;
+    if (nuevoMes < 0) { nuevoMes = 11; nuevoAnio--; }
+    if (nuevoMes > 11) { nuevoMes = 0; nuevoAnio++; }
+    setMes(nuevoMes);
+    setAnio(nuevoAnio);
+  };
+
+  const irHoy = () => {
+    const ahora = new Date();
+    setMes(ahora.getMonth());
+    setAnio(ahora.getFullYear());
+    setDiaSeleccionado(fechaLocalAR(ahora));
+  };
+
+  const diaSeleccionadoFormateado = useMemo(() => {
+    if (!diaSeleccionado) return '';
+    const [y, m, d] = diaSeleccionado.split('-').map(n => parseInt(n, 10));
+    return `${d} de ${NOMBRES_MESES[m - 1]} de ${y}`;
+  }, [diaSeleccionado]);
+
+  const totalDelDia = detalleDelDia?.testsDelDia.length || 0;
+  const fallasDelDia = detalleDelDia?.testsDelDia.filter(t => t.estado === 'RECHAZADO').length || 0;
+  const ncsDelDia    = detalleDelDia?.ncsDelDia.length || 0;
+
+  return (
+    <div style={{ padding: '8px 0' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 20, alignItems: 'flex-start' }}>
+        {/* CALENDARIO */}
+        <Card t={t} padding={20}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <button onClick={() => cambiarMes(-1)} style={{
+              background: t.surfaceHi, border: `1px solid ${t.border}`, color: t.text,
+              padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+              fontFamily: 'JetBrains Mono', fontSize: 14
+            }}>‹</button>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, color: t.text, fontWeight: 600, textTransform: 'capitalize' }}>
+                {NOMBRES_MESES[mes]} {anio}
+              </div>
+              <button onClick={irHoy} style={{
+                background: 'transparent', border: 'none', color: t.accent,
+                fontFamily: 'JetBrains Mono', fontSize: 10, letterSpacing: '0.1em',
+                cursor: 'pointer', padding: 0, marginTop: 2
+              }}>IR A HOY</button>
+            </div>
+            <button onClick={() => cambiarMes(1)} style={{
+              background: t.surfaceHi, border: `1px solid ${t.border}`, color: t.text,
+              padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+              fontFamily: 'JetBrains Mono', fontSize: 14
+            }}>›</button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, marginBottom: 6 }}>
+            {DIAS_SEMANA.map((d, i) => (
+              <div key={i} style={{
+                textAlign: 'center', fontFamily: 'JetBrains Mono', fontSize: 10,
+                color: t.textDim, letterSpacing: '0.1em', padding: '6px 0'
+              }}>{d}</div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+            {grillaCalendario.map((celda, i) => {
+              if (!celda) return <div key={i} style={{ aspectRatio: '1' }} />;
+              const resumen = resumenPorDia.get(celda.isoDia);
+              const seleccionado = celda.isoDia === diaSeleccionado;
+              const esHoy = celda.isoDia === fechaLocalAR(new Date());
+              const tieneFallas = resumen && resumen.fallas > 0;
+              return (
+                <button key={i} onClick={() => setDiaSeleccionado(celda.isoDia)} style={{
+                  aspectRatio: '1', display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                  background: seleccionado ? t.accent : (resumen ? t.surfaceHi : 'transparent'),
+                  color: seleccionado ? t.bg : (esHoy ? t.accent : t.text),
+                  border: `1px solid ${seleccionado ? t.accent : (esHoy ? t.accent + '60' : t.border)}`,
+                  borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: 13,
+                  fontWeight: esHoy || seleccionado ? 600 : 400,
+                  position: 'relative', padding: 0,
+                  transition: 'background 0.12s'
+                }}>
+                  <span>{celda.dia}</span>
+                  {resumen && (
+                    <div style={{
+                      fontSize: 9, marginTop: 2, fontWeight: 500,
+                      color: seleccionado ? t.bg : (tieneFallas ? t.danger : t.success)
+                    }}>
+                      {resumen.total}{tieneFallas ? `·${resumen.fallas}` : ''}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 14, padding: 10, background: t.surfaceHi, borderRadius: 6, border: `1px solid ${t.border}` }}>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em', marginBottom: 6 }}>REFERENCIAS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'Manrope', fontSize: 11, color: t.textMuted }}>
+              <span><span style={{ color: t.success }}>N</span> = pruebas del día (todas OK)</span>
+              <span><span style={{ color: t.danger }}>N · X</span> = N pruebas, X fallas</span>
+            </div>
+          </div>
+        </Card>
+
+        {/* DETALLE DEL DÍA */}
+        <div>
+          <Card t={t} padding={20} style={{ marginBottom: 16 }}>
+            <SectionHeader t={t}
+              title={diaSeleccionadoFormateado || 'Seleccioná un día'}
+              sub={diaSeleccionado
+                ? `${totalDelDia} ${totalDelDia === 1 ? 'prueba' : 'pruebas'} · ${fallasDelDia} ${fallasDelDia === 1 ? 'falla' : 'fallas'} · ${ncsDelDia} ${ncsDelDia === 1 ? 'NC abierta' : 'NC abiertas'}`
+                : 'Hacé click en un día del calendario para ver el detalle por turno'}
+            />
+          </Card>
+
+          {!diaSeleccionado ? (
+            <Card t={t} padding={20}>
+              <EmptyState t={t} icon={ClipboardList}
+                title="Sin selección"
+                desc="Elegí un día del calendario de la izquierda. Los días con pruebas tienen un número en la celda."
+              />
+            </Card>
+          ) : cargando ? (
+            <Card t={t} padding={20}>
+              <EmptyState t={t} icon={Activity} title="Cargando…" desc="Trayendo pruebas y NC del período." />
+            </Card>
+          ) : totalDelDia === 0 && ncsDelDia === 0 ? (
+            <Card t={t} padding={20}>
+              <EmptyState t={t} icon={ClipboardList}
+                title="Sin actividad ese día"
+                desc="No hay pruebas registradas. Probá con otra fecha o verificá que la máquina haya estado en producción."
+              />
+            </Card>
+          ) : (
+            TURNOS_INFO.map(turno => {
+              const filas = detalleDelDia.porTurno[turno.codigo] || [];
+              const fallasTurno = filas.filter(f => f.estado === 'RECHAZADO').length;
+              const Icon = turno.icon;
+              return (
+                <Card key={turno.codigo} t={t} padding={20} style={{ marginBottom: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${t.border}`, paddingBottom: 12, marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 6,
+                        background: t.surfaceHi, border: `1px solid ${t.border}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        <Icon size={16} color={t.textMuted} />
+                      </div>
+                      <div>
+                        <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600, color: t.text }}>
+                          Turno {turno.nombre}
+                        </div>
+                        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em' }}>
+                          {turno.horario}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <Pill variant="default" t={t} mono>{filas.length} pruebas</Pill>
+                      {fallasTurno > 0 && <Pill variant="danger" t={t} mono>{fallasTurno} fallas</Pill>}
+                    </div>
+                  </div>
+
+                  {filas.length === 0 ? (
+                    <div style={{
+                      fontFamily: 'Manrope', fontSize: 12, color: t.textDim,
+                      padding: '12px 0', textAlign: 'center'
+                    }}>
+                      Sin pruebas en este turno
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: '90px 90px 100px 1fr 90px 100px', gap: 12, alignItems: 'center', fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em', padding: '6px 0', borderBottom: `1px solid ${t.border}` }}>
+                      <span>HORA</span>
+                      <span>MÁQUINA</span>
+                      <span>OPERARIO</span>
+                      <span>PRODUCTO · CAJA · LOTE</span>
+                      <span>ESTADO</span>
+                      <span style={{ textAlign: 'right' }}>FALLAS</span>
+                    </div>
+                  )}
+
+                  {filas.map(f => (
+                    <div key={f.supabase_id || f.id} style={{
+                      display: 'grid', gridTemplateColumns: '90px 90px 100px 1fr 90px 100px',
+                      gap: 12, alignItems: 'center',
+                      padding: '10px 0', borderBottom: `1px solid ${t.border}`,
+                      fontSize: 12
+                    }}>
+                      <span style={{ fontFamily: 'JetBrains Mono', color: t.text }}>{f.fecha}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono', color: t.textMuted }}>{f.maquina}</span>
+                      <span style={{ fontFamily: 'Manrope', color: t.text }}>{f.operario || f.legajoOperario}</span>
+                      <span style={{ fontFamily: 'Manrope', color: t.text }}>
+                        <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11 }}>{f.codigoProducto || '—'}</span>
+                        {' · '}<span style={{ color: t.textMuted }}>caja {f.caja || '—'}</span>
+                        {' · '}<span style={{ color: t.accent, fontFamily: 'JetBrains Mono' }}>{f.lote || '—'}</span>
+                      </span>
+                      <Pill variant={f.estado === 'OK' ? 'success' : 'danger'} t={t}>{f.estado}</Pill>
+                      <span style={{ textAlign: 'right', fontFamily: 'JetBrains Mono', color: f.cabezalesFalla > 0 ? t.danger : t.textDim }}>
+                        {f.cabezalesFalla || 0}/20
+                      </span>
+                    </div>
+                  ))}
+                </Card>
+              );
+            })
+          )}
+
+          {/* NC del día (resumen, no agrupadas por turno porque pueden cerrarse mucho después) */}
+          {detalleDelDia && detalleDelDia.ncsDelDia.length > 0 && (
+            <Card t={t} padding={20}>
+              <SectionHeader t={t}
+                title="No conformidades abiertas ese día"
+                sub={`${detalleDelDia.ncsDelDia.length} en total`}
+              />
+              <div style={{ marginTop: 12 }}>
+                {detalleDelDia.ncsDelDia.map(nc => {
+                  const horaApertura = new Date(nc.aperturaAt || nc.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+                  return (
+                    <div key={nc.supabase_id} style={{
+                      display: 'grid', gridTemplateColumns: '110px 80px 110px 1fr 110px',
+                      gap: 12, padding: '10px 0', borderBottom: `1px solid ${t.border}`,
+                      fontSize: 12, alignItems: 'center'
+                    }}>
+                      <span style={{ fontFamily: 'JetBrains Mono', color: t.text, fontWeight: 500 }}>{nc.id}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono', color: t.textMuted }}>{horaApertura}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono', color: t.textMuted }}>{nc.maquina || '—'}</span>
+                      <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {nc.tipos?.slice(0, 3).map(tid => {
+                          const tf = TIPOS_FALLA.find(x => x.id === tid);
+                          return <Pill key={tid} variant={tf?.gravedad === 'CRITICA' ? 'crit' : 'danger'} t={t}>{tf?.nombre || tid}</Pill>;
+                        })}
+                      </span>
+                      <Pill variant={nc.estado === 'CERRADA' ? 'success' : nc.estado === 'EN_ANALISIS' ? 'warn' : 'danger'} t={t} mono>
+                        {nc.estado}
+                      </Pill>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// =================================================================
 // VISTA SUPERVISOR (con cambios v4)
 // =================================================================
 
@@ -2307,6 +2708,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [gestionarNC, setGestionarNC] = useState(null);
   // FIX v5: alerta in-app cuando llega una prueba RECHAZADA recién cargada
   const [alertaFalla, setAlertaFalla] = useState(null);
+  // FIX v5: tab activa (turno actual / historial)
+  const [tabActiva, setTabActiva] = useState('turno');
 
   const reload = async () => {
     setMachines(await dataService.getMachines());
@@ -2507,7 +2910,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 32, fontWeight: 600, color: t.text, marginBottom: 4, letterSpacing: '-0.02em' }}>
-          Turno mañana · en curso
+          {tabActiva === 'turno' ? 'Turno mañana · en curso' : 'Historial por turno'}
         </h1>
         <div style={{ display: 'flex', gap: 16, fontFamily: 'JetBrains Mono', fontSize: 11, color: t.textDim, letterSpacing: '0.05em' }}>
           <span>{machinesIntegradas.length}/{machines.length} MÁQUINAS INTEGRADAS</span>
@@ -2515,6 +2918,29 @@ const VistaSupervisor = ({ t, currentUser }) => {
           <span style={{ color: t.success }}>● SISTEMA OPERATIVO</span>
         </div>
       </div>
+
+      {/* FIX v5: tabs para alternar entre turno actual e historial */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${t.border}`, marginBottom: 20 }}>
+        {[
+          { id: 'turno', label: 'Turno actual', icon: Activity },
+          { id: 'historial', label: 'Historial', icon: History },
+        ].map(tb => (
+          <button key={tb.id} onClick={() => setTabActiva(tb.id)} style={{
+            padding: '10px 16px', background: 'transparent', border: 'none',
+            borderBottom: `2px solid ${tabActiva === tb.id ? t.accent : 'transparent'}`,
+            color: tabActiva === tb.id ? t.text : t.textMuted, cursor: 'pointer',
+            fontFamily: 'Manrope', fontSize: 13, fontWeight: 500,
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: -1
+          }}>
+            <tb.icon size={14} /> {tb.label}
+          </button>
+        ))}
+      </div>
+
+      {tabActiva === 'historial' && <HistorialPorTurno t={t} />}
+
+      {tabActiva === 'turno' && (<>
+      {/* INICIO bloque turno actual — los KPIs, cola de aprobaciones y NC del turno */}
 
       {/* CAMBIO v4: Alerta de observaciones no leídas */}
       {unreadObs.length > 0 && (
@@ -2672,6 +3098,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
           )}
         </div>
       </Card>
+      </>)} {/* FIX v5: cierra bloque turno actual */}
 
       {observarTest && (
         <ModalObservar
@@ -2839,6 +3266,7 @@ const VistaAdmin = ({ t, currentUser }) => {
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: Activity },
+    { id: 'historial', label: 'Historial', icon: History }, // FIX v5
     { id: 'usuarios', label: 'Usuarios', icon: Users },
     { id: 'maquinas', label: 'Máquinas', icon: Cpu },
   ];
@@ -2869,6 +3297,7 @@ const VistaAdmin = ({ t, currentUser }) => {
       </div>
 
       {tab === 'dashboard' && <AdminDashboard t={t} />}
+      {tab === 'historial' && <HistorialPorTurno t={t} />}
       {tab === 'usuarios' && <AdminUsuarios t={t} currentUser={currentUser} />}
       {tab === 'maquinas' && <AdminMaquinas t={t} />}
     </div>
