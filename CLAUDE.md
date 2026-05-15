@@ -18,11 +18,11 @@ deberia quedar en el registro un - Estado final: OK / RECHAZADO / PENDIENTE (en 
 
 — STACK TECNOLÓGICO DISPONIBLE —
 
-- N8N (automatización de flujos, tengo licencia activa)
 
-- Airtable (base de datos principal)
+-next js programacion
+- Supabase (base de datos principal)
 
-- Google Sheets o Excel (para reportes y exportación)
+- vercel (plataforma)
 
 - Interfaz web simple para el operario (puede ser una form de Airtable, un formulario web embebido o una interfaz custom en HTML/JS)
 

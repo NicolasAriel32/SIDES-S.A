@@ -587,7 +587,28 @@ const dataService = {
       .single()
 
     console.log('createTest prueba insert response:', { prueba, error })
-    if (error) { console.error('createTest:', error); return null; }
+    if (error) {
+      if (error.code === '23505') {
+        const timestampRecibida = test.fechaSenal || new Date().toISOString()
+        const { data: existente, error: existenteError } = await supabase
+          .from('pruebas')
+          .select('*')
+          .eq('id_maquina', test.maquina)
+          .eq('timestamp_recibida', timestampRecibida)
+          .eq('anulada', false)
+          .maybeSingle()
+
+        if (existenteError) {
+          console.error('createTest: error fetching existing duplicate prueba', existenteError)
+          return null
+        }
+
+        return existente
+      }
+
+      console.error('createTest:', error)
+      return null
+    }
 
     // 5) Si hay fallas, insertarlas en pruebas_fallas con tipo_falla_id
     if (test.tipos && test.tipos.length > 0) {
@@ -653,6 +674,13 @@ const dataService = {
         } catch {}
       }
     }
+    if (updates.esperandoAprobacion === true) {
+      supabaseUpdates.estado_final = 'PENDIENTE_APROBACION'
+      supabaseUpdates.tuvo_falla = true
+      if (updates.estado === undefined) supabaseUpdates.resultado = 'RECHAZADO'
+    }
+    if (updates.estadoFinal !== undefined) supabaseUpdates.estado_final = updates.estadoFinal
+    if (updates.tuvoFalla !== undefined) supabaseUpdates.tuvo_falla = updates.tuvoFalla
     if (updates.estado !== undefined) supabaseUpdates.resultado         = updates.estado
     if (updates.supervisorLegajo)     supabaseUpdates.supervisor_legajo = updates.supervisorLegajo
 
@@ -670,14 +698,18 @@ const dataService = {
   // Schema real: id, timestamp, usuario_legajo NOT NULL, usuario_nombre,
   // accion NOT NULL, tabla_afectada, registro_id, descripcion,
   // hash_evento (nullable ahora), firma_evento (nullable ahora).
-  async getAuditLog() {
-    const { data, error } = await supabase
+  async getAuditLog({ desde, hasta, limite = 200 } = {}) {
+    let query = supabase
       .from('audit_log')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(200)
+    if (desde) query = query.gte('created_at', typeof desde === 'string' ? desde : new Date(desde).toISOString())
+    if (hasta) query = query.lte('created_at', typeof hasta === 'string' ? hasta : new Date(hasta).toISOString())
+    if (limite) query = query.limit(limite)
 
-    console.log('getAuditLog supabase response:', { data, error })
+    const { data, error } = await query
+
+    console.log('getAuditLog supabase response:', { data, error, desde, hasta, limite })
     if (error) { console.error('getAuditLog:', error); return []; }
 
     return (data || []).map(e => ({
@@ -1182,12 +1214,12 @@ const ToastObservacion = ({ obs, onConfirm, t }) => (
     top: 80,
     right: 24,
     width: 380,
-    background: t.surface,
+    background: `linear-gradient(135deg, ${t.surface}, ${t.surfaceHi})`,
     border: `2px solid ${t.warn}`,
     borderRadius: 10,
-    boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 4px ${t.warnSoft}`,
+    boxShadow: `0 8px 32px rgba(0,0,0,0.35), 0 0 16px ${t.warnSoft}`,
     zIndex: 200,
-    animation: 'slideInRight 0.3s ease-out',
+    animation: 'slideInRight 0.3s ease-out, neonPulse 2.2s ease-in-out infinite',
     overflow: 'hidden'
   }}>
     <div style={{
@@ -1198,7 +1230,7 @@ const ToastObservacion = ({ obs, onConfirm, t }) => (
       alignItems: 'center',
       gap: 10
     }}>
-      <BellRing size={18} color={t.warn} style={{ animation: 'pulse 1.5s infinite' }} />
+      <BellRing size={18} color={t.warn} style={{ animation: 'pulse 1.5s infinite, blinkGlow 1.3s ease-in-out infinite' }} />
       <div style={{ flex: 1 }}>
         <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600, color: t.warn }}>
           Nueva observación del supervisor
@@ -1238,7 +1270,9 @@ const BannerObservaciones = ({ observaciones, onMarkRead, t }) => {
       marginBottom: 16,
       background: t.warnSoft,
       borderColor: t.warn,
-      overflow: 'hidden'
+      overflow: 'hidden',
+      boxShadow: `0 0 24px rgba(255, 194, 0, 0.22)`,
+      animation: 'neonPulse 2.2s ease-in-out infinite'
     }}>
       <div style={{
         padding: '10px 16px',
@@ -1543,6 +1577,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [lote, setLote] = useState('');
   const [obs, setObs] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [maquinaInfo, setMaquinaInfo] = useState(null);
   const [pruebasDelTurno, setPruebasDelTurno] = useState([]);
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState(0);
@@ -1701,49 +1736,51 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
+    if (submitting) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
     if (tuvoFalla === true && tiposSeleccionados.length === 0) return;
 
-    const test = {
-      ...pruebaPendiente,
-      operario: `${user.nombre} ${user.apellido}`,
-      legajoOperario: user.legajo,
-      estado: tuvoFalla ? 'RECHAZADO' : 'OK',
-      caja, lote, codigoProducto, observaciones: obs,
-      tipos: tiposSeleccionados, cabezalesFalla,
-      esperandoAprobacion: tuvoFalla,
-      timestamp: new Date().toISOString(),
-    };
+    setSubmitting(true);
+    try {
+      const test = {
+        ...pruebaPendiente,
+        operario: `${user.nombre} ${user.apellido}`,
+        legajoOperario: user.legajo,
+        estado: tuvoFalla ? 'RECHAZADO' : 'OK',
+        caja, lote, codigoProducto, observaciones: obs,
+        tipos: tiposSeleccionados, cabezalesFalla,
+        esperandoAprobacion: tuvoFalla,
+        timestamp: new Date().toISOString(),
+      };
 
-    // FIX v5: chequeamos el resultado de createTest. Si falla (p.ej. máquina
-    // sin sembrar) avisamos en pantalla en vez de mostrar "registrado" en falso.
-    const inserted = await dataService.createTest(test);
-    if (!inserted) {
-      alert(
-        'No se pudo registrar la prueba.\n\n' +
-        `Verificá que la máquina ${test.maquina} esté creada en la tabla "maquinas" ` +
-        'y que el legajo del operario exista en "usuarios".'
-      );
-      return;
+      const inserted = await dataService.createTest(test);
+      if (!inserted) {
+        alert(
+          'No se pudo registrar la prueba.\n\n' +
+          `Verificá que la máquina ${test.maquina} esté creada en la tabla "maquinas" ` +
+          'y que el legajo del operario exista en "usuarios".'
+        );
+        return;
+      }
+      await dataService.logEvent({
+        accion: 'CREATE', usuario: `${user.nombre} ${user.apellido}`,
+        desc: `Prueba ${inserted.id} · ${test.estado} · ${codigoProducto}`
+      });
+
+      setShowSuccess(true);
+      setTimeout(async () => {
+        setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+        setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
+        setShowSuccess(false);
+        setPruebaPendiente(null);
+        if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
+        refresh();
+      }, 2200);
+    } finally {
+      setSubmitting(false);
     }
-    await dataService.logEvent({
-      accion: 'CREATE', usuario: `${user.nombre} ${user.apellido}`,
-      desc: `Prueba ${inserted.id} · ${test.estado} · ${codigoProducto}`
-    });
-
-    setShowSuccess(true);
-    setTimeout(async () => {
-      setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
-      setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
-      setShowSuccess(false);
-      // Cerramos la prueba pendiente: el operario debe esperar la próxima señal
-      setPruebaPendiente(null);
-      // Refrescamos contador del turno con la prueba recién insertada
-      if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
-      refresh();
-    }, 2200);
   };
 
   const tieneCriticaSeleccionada = tiposSeleccionados.some(id => TIPOS_FALLA.find(tf => tf.id === id)?.gravedad === 'CRITICA');
@@ -1994,15 +2031,17 @@ const VistaOperario = ({ t, user, refresh }) => {
                 }} />
             </div>
 
-            <button onClick={handleSubmit} disabled={!formularioValido} style={{
+            <button onClick={handleSubmit} disabled={!formularioValido || submitting} style={{
               width: '100%', marginTop: 16, padding: 16,
-              background: t.accent, color: t.bg, border: 'none', borderRadius: 8,
+              background: formularioValido && !submitting ? t.accent : t.surfaceHi,
+              color: formularioValido && !submitting ? t.bg : t.textMuted,
+              border: 'none', borderRadius: 8,
               fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600,
-              cursor: formularioValido ? 'pointer' : 'not-allowed',
+              cursor: formularioValido && !submitting ? 'pointer' : 'not-allowed',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              opacity: formularioValido ? 1 : 0.4, transition: 'opacity 0.15s'
+              opacity: formularioValido && !submitting ? 1 : 0.4, transition: 'opacity 0.15s'
             }}>
-              Guardar resultado<ChevronRight size={18} />
+              {submitting ? 'Guardando...' : 'Guardar resultado'}<ChevronRight size={18} />
             </button>
           </Card>
         </>
@@ -2741,6 +2780,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
         const usuariosMap = await dataService.getUsersCache()
         const operario = usuariosMap.get(payload.new.operario_legajo) || payload.new.operario_legajo
         setAlertaFalla({
+          id: payload.new.id,
           maquina: payload.new.id_maquina,
           operario,
           legajoOperario: payload.new.operario_legajo,
@@ -2821,6 +2861,19 @@ const VistaSupervisor = ({ t, currentUser }) => {
     reload()
   }
 
+  const enviarAColaDeAprobacion = async () => {
+    if (!alertaFalla?.id) return;
+    await dataService.updateTest(alertaFalla.id, {
+      estado: 'RECHAZADO',
+      estadoFinal: 'PENDIENTE_APROBACION',
+      esperandoAprobacion: true,
+      tuvoFalla: true
+    });
+    setTabActiva('turno');
+    setAlertaFalla(null);
+    reload();
+  }
+
   const aprobarRechazo = async () => {
     await dataService.updateTest(enAprobacion.id, { esperandoAprobacion: false, aprobado: true });
     await dataService.createNC({
@@ -2866,7 +2919,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
             borderBottom: `1px solid ${t.danger}40`,
             display: 'flex', alignItems: 'center', gap: 10
           }}>
-            <AlertTriangle size={18} color={t.danger} style={{ animation: 'pulse 1.5s infinite' }} />
+            <AlertTriangle size={18} color={t.danger} style={{ animation: 'pulse 1.5s infinite, blinkGlow 1.3s ease-in-out infinite' }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600, color: t.danger }}>
                 Nueva prueba con falla
@@ -2897,7 +2950,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
                 "{alertaFalla.observaciones}"
               </div>
             )}
-            <button onClick={() => setAlertaFalla(null)} style={{
+            <button onClick={enviarAColaDeAprobacion} style={{
               width: '100%', marginTop: 12, padding: 10, background: t.danger, color: t.bg,
               border: 'none', borderRadius: 6, cursor: 'pointer',
               fontFamily: 'Bricolage Grotesque', fontSize: 13, fontWeight: 600
@@ -3683,10 +3736,32 @@ const HealthCard = ({ icon: Icon, label, value, sub, tone, t }) => {
 const VistaAuditor = ({ t, currentUser }) => {
   const [audit, setAudit] = useState([]);
   const [query, setQuery] = useState('');
+  const [periodoFiltro, setPeriodoFiltro] = useState('48h');
+  const [desdeFiltro, setDesdeFiltro] = useState('');
+  const [hastaFiltro, setHastaFiltro] = useState('');
 
   useEffect(() => {
-    dataService.getAuditLog().then(setAudit);
-  }, []);
+    const cargarAudit = async () => {
+      const ahora = new Date();
+      let params = { limite: 500 };
+      if (periodoFiltro === '48h') {
+        params.desde = new Date(ahora.getTime() - 48 * 3600 * 1000).toISOString();
+        params.hasta = ahora.toISOString();
+      } else if (periodoFiltro === '7d') {
+        params.desde = new Date(ahora.getTime() - 7 * 24 * 3600 * 1000).toISOString();
+        params.hasta = ahora.toISOString();
+      } else {
+        if (desdeFiltro) params.desde = new Date(desdeFiltro).toISOString();
+        if (hastaFiltro) {
+          const endOfDay = new Date(hastaFiltro);
+          endOfDay.setHours(23, 59, 59, 999);
+          params.hasta = endOfDay.toISOString();
+        }
+      }
+      setAudit(await dataService.getAuditLog(params));
+    };
+    cargarAudit();
+  }, [periodoFiltro, desdeFiltro, hastaFiltro]);
 
   const filtered = audit.filter(e =>
     !query ||
@@ -3733,6 +3808,31 @@ const VistaAuditor = ({ t, currentUser }) => {
 
       <Card t={t} padding={20} style={{ marginBottom: 16 }}>
         <SectionHeader t={t} title="Trazabilidad y búsqueda" sub="Buscá por descripción, usuario o evento" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 14 }}>
+          <div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginBottom: 6 }}>Periodo</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <ButtonSm t={t} variant={periodoFiltro === '48h' ? 'accent' : 'default'} onClick={() => setPeriodoFiltro('48h')}>Últimas 48h</ButtonSm>
+              <ButtonSm t={t} variant={periodoFiltro === '7d' ? 'accent' : 'default'} onClick={() => setPeriodoFiltro('7d')}>Últimos 7d</ButtonSm>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginBottom: 6 }}>Desde</div>
+            <input type="date" value={desdeFiltro} onChange={e => { setDesdeFiltro(e.target.value); setPeriodoFiltro('custom'); }} style={{
+              width: '100%', padding: '10px 12px', borderRadius: 6,
+              background: t.surfaceHi, border: `1px solid ${t.border}`,
+              color: t.text, fontFamily: 'Manrope', fontSize: 13, boxSizing: 'border-box', outline: 'none'
+            }} />
+          </div>
+          <div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginBottom: 6 }}>Hasta</div>
+            <input type="date" value={hastaFiltro} onChange={e => { setHastaFiltro(e.target.value); setPeriodoFiltro('custom'); }} style={{
+              width: '100%', padding: '10px 12px', borderRadius: 6,
+              background: t.surfaceHi, border: `1px solid ${t.border}`,
+              color: t.text, fontFamily: 'Manrope', fontSize: 13, boxSizing: 'border-box', outline: 'none'
+            }} />
+          </div>
+        </div>
         <div style={{ marginTop: 14, position: 'relative' }}>
           <Search size={14} color={t.textMuted} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar..." style={{
@@ -3758,14 +3858,20 @@ const VistaAuditor = ({ t, currentUser }) => {
                 gap: 12, alignItems: 'center'
               }}>
                 <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: t.textDim }}>
-                  {new Date(e.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {new Date(e.timestamp).toLocaleTimeString('es-AR', {
+                    timeZone: 'America/Argentina/Buenos_Aires',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                  })}
                 </span>
                 <span style={{ textAlign: 'center' }}>
                   <Pill variant={e.accion === 'CREATE' ? 'info' : e.accion === 'APPROVE' ? 'success' : 'default'} t={t} mono>{e.accion}</Pill>
                 </span>
                 <div>
                   <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text }}>{e.desc}</div>
-                  <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>por {e.usuario}</div>
+                  <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>
+                    por {e.usuario}{e.usuario_legajo ? ` (${e.usuario_legajo})` : ''}
+                    {e.tabla_afectada && e.registro_id ? ` · ${e.tabla_afectada}/${e.registro_id}` : ''}
+                  </div>
                 </div>
                 <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textMuted, textAlign: 'right' }}>
                   <Hash size={10} style={{ display: 'inline', marginRight: 4 }} />{e.hash}
@@ -3853,6 +3959,20 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', background: t.bg, color: t.text, fontFamily: 'Manrope, sans-serif' }}>
       <style>{FONT_IMPORT}</style>
+      <style>{`
+        @keyframes neonPulse {
+          0%, 100% {
+            box-shadow: 0 0 12px rgba(255,255,200,0.18), 0 0 32px rgba(255,170,60,0.12);
+          }
+          50% {
+            box-shadow: 0 0 24px rgba(255,255,200,0.45), 0 0 48px rgba(255,140,10,0.28);
+          }
+        }
+        @keyframes blinkGlow {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+        }
+      `}</style>
 
       <Header user={user} onLogout={handleLogout} theme={theme}
         toggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} t={t} hora={hora} />
