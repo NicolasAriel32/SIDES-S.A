@@ -24,10 +24,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,   // El sistema usa sessionStorage propio (legajo + password en cliente)
-    autoRefreshToken: false,
-  },
+  // auth: usa los defaults de Supabase (persistSession=true, autoRefreshToken=true)
+  // Esto es necesario para que auth.uid() funcione correctamente en RLS.
   realtime: {
     params: {
       eventsPerSecond: 5,    // Limita el throughput del canal Realtime
