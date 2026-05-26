@@ -558,9 +558,11 @@ const dataService = {
     const numeroSec = await this._siguienteNumeroSecuencial()
 
     // 3) Mapeo de estado del modelo interno → resultado/estado_final del schema
-    const tuvoFalla = test.estado === 'RECHAZADO'
-    const resultado = tuvoFalla ? 'RECHAZADO' : 'OK'
-    const estadoFinal = tuvoFalla ? 'PENDIENTE_APROBACION' : 'OK'
+    // v6: si es auto-PENDIENTE (60 min sin carga), resultado queda null y estado_final='PENDIENTE'
+    const esPendienteAuto = test.autoPendiente === true
+    const tuvoFalla = esPendienteAuto ? false : (test.estado === 'RECHAZADO')
+    const resultado = esPendienteAuto ? null : (tuvoFalla ? 'RECHAZADO' : 'OK')
+    const estadoFinal = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'PENDIENTE_APROBACION' : 'OK')
 
     // 4) Insert en pruebas
     const { data: prueba, error } = await supabase
@@ -1581,6 +1583,8 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [maquinaInfo, setMaquinaInfo] = useState(null);
   const [pruebasDelTurno, setPruebasDelTurno] = useState([]);
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState(0);
+  // v6: flag para que el auto-guardado de PENDIENTE (60 min) solo se ejecute una vez
+  const [autoGuardado, setAutoGuardado] = useState(false);
 
   // CAMBIO v4: estados para mensajes del supervisor
   const [observaciones, setObservaciones] = useState([]);
@@ -1592,14 +1596,15 @@ const VistaOperario = ({ t, user, refresh }) => {
   // solo deja al operario listo: máquina asignada + cuántas pruebas lleva el turno.
   const recalcularContador = async (maquinaId) => {
     const allTests = await dataService.getTests();
-    const hoy = new Date().toISOString().slice(0, 10);
+    // FIX v6: usa zona horaria Argentina para que el día no se reinicie a las 21h UTC
+    const hoy = fechaLocalAR(new Date());
     const delTurno = allTests.filter(test =>
       test.maquina === maquinaId &&
-      (test.timestamp || '').slice(0, 10) === hoy
+      fechaLocalAR(test.timestampSenal || test.timestamp) === hoy
     );
     setPruebasDelTurno(delTurno);
-    // numeroPrueba = cantidad de pruebas YA cerradas en el turno + 1 (la próxima)
-    return delTurno.filter(test => test.estado !== 'PENDIENTE').length + 1;
+    // numeroPrueba = cantidad de pruebas YA cerradas hoy (sin PENDIENTE auto) + 1
+    return delTurno.filter(test => test.estadoFinal !== 'PENDIENTE').length + 1;
   };
 
   useEffect(() => {
@@ -1629,12 +1634,13 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!maquinaInfo?.id) return;
     const numeroPrueba = await recalcularContador(maquinaInfo.id);
     const ahora = new Date();
+    // FIX v6: fecha del ID usa zona AR para que coincida con el día calendario local
     setPruebaPendiente({
-      id: `PRB-${ahora.toISOString().slice(0, 10).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
+      id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
       maquina: maquinaInfo.id,
       numeroSecuencial: numeroPrueba,
       fechaSenal: ahora.toISOString(),
-      fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+      fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
     });
     await dataService.logEvent({
       accion: 'SIGNAL',
@@ -1654,6 +1660,63 @@ const VistaOperario = ({ t, user, refresh }) => {
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, [pruebaPendiente]);
+
+  // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
+  const LIMITE_PENDIENTE_SEG = 3600; // 60 min
+  const autoGuardarComoPendiente = async () => {
+    if (!pruebaPendiente || autoGuardado) return;
+    setAutoGuardado(true);
+    try {
+      const test = {
+        ...pruebaPendiente,
+        operario: `${user.nombre} ${user.apellido}`,
+        legajoOperario: user.legajo,
+        estado: 'PENDIENTE',
+        caja: caja || null,
+        lote: lote || null,
+        codigoProducto: codigoProducto || null,
+        observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
+        tipos: [],
+        cabezalesFalla: 0,
+        esperandoAprobacion: false,
+        timestamp: new Date().toISOString(),
+        autoPendiente: true,
+      };
+      const inserted = await dataService.createTest(test);
+      if (inserted) {
+        await dataService.logEvent({
+          accion: 'AUTO_PENDIENTE',
+          usuario: `${user.nombre} ${user.apellido}`,
+          usuarioLegajo: user.legajo,
+          desc: `Prueba ${pruebaPendiente.id} auto-registrada como PENDIENTE · 60 min sin carga`,
+          tabla: 'pruebas',
+          registroId: inserted.supabase_id,
+        });
+      }
+    } catch (e) {
+      console.error('autoGuardarComoPendiente:', e);
+    }
+    // Resetear form
+    setPruebaPendiente(null);
+    setAutoGuardado(false);
+    setTuvoFalla(null);
+    setTiposSeleccionados([]);
+    setCabezalesFalla(0);
+    setCaja('');
+    setLote('');
+    setObs('');
+    setCodigoProducto('');
+    setErrorCodigo('');
+    if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
+    refresh();
+  };
+
+  useEffect(() => {
+    if (!pruebaPendiente || autoGuardado) return;
+    if (tiempoTranscurrido >= LIMITE_PENDIENTE_SEG) {
+      autoGuardarComoPendiente();
+    }
+  }, [tiempoTranscurrido]);
 
   // CAMBIO v4: Polling cada 15 segundos + Realtime como respaldo
   // Usamos operario_legajo porque no tenemos Supabase Auth (piloto sin JWT)
@@ -1880,8 +1943,8 @@ const VistaOperario = ({ t, user, refresh }) => {
       ) : pruebaPendiente && (
         <>
           <Card t={t} padding={24} style={{
-            background: `linear-gradient(135deg, ${t.warnSoft} 0%, ${t.surface} 60%)`,
-            borderColor: t.warn + '60', marginBottom: 20
+            background: `linear-gradient(135deg, ${tiempoTranscurrido >= 3000 ? t.dangerSoft : t.warnSoft} 0%, ${t.surface} 60%)`,
+            borderColor: (tiempoTranscurrido >= 3000 ? t.danger : t.warn) + '60', marginBottom: 20
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
@@ -1892,11 +1955,27 @@ const VistaOperario = ({ t, user, refresh }) => {
                 <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 13, marginTop: 4 }}>
                   Señal recibida {pruebaPendiente.fechaSenalFormateada} · 20 cabezales para evaluar
                 </div>
+                {/* v6: aviso a los 50 min que se auto-guardará como PENDIENTE */}
+                {tiempoTranscurrido >= 3000 && tiempoTranscurrido < LIMITE_PENDIENTE_SEG && (
+                  <div style={{
+                    marginTop: 10, padding: '8px 12px',
+                    background: t.dangerSoft, border: `1px solid ${t.danger}60`,
+                    borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8
+                  }}>
+                    <AlertTriangle size={14} color={t.danger} />
+                    <span style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, fontWeight: 500 }}>
+                      En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} se registrará automáticamente como PENDIENTE
+                    </span>
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.1em' }}>TRANSCURRIDO</div>
-                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 36, color: t.warn, fontWeight: 500, lineHeight: 1 }}>
+                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 36, color: tiempoTranscurrido >= 3000 ? t.danger : t.warn, fontWeight: 500, lineHeight: 1 }}>
                   {formatTiempo(tiempoTranscurrido)}
+                </div>
+                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 4 }}>
+                  LÍMITE 60 MIN
                 </div>
               </div>
             </div>
@@ -2892,6 +2971,20 @@ const VistaSupervisor = ({ t, currentUser }) => {
     reload();
   };
 
+  // v6: quitar de la cola sin abrir NC — solo marcar como revisado/leído
+  const marcarLeidoAprobacion = async () => {
+    await dataService.updateTest(enAprobacion.id, {
+      estadoFinal: 'REVISADO',
+      esperandoAprobacion: false,
+    });
+    await dataService.logEvent({
+      accion: 'MARK_READ',
+      usuario: `${currentUser.nombre} ${currentUser.apellido}`,
+      desc: `Prueba ${enAprobacion.id} quitada de cola de aprobaciones · marcada como leída (sin NC)`
+    });
+    reload();
+  };
+
   // CAMBIO v4: actualizar NC desde el modal
   const actualizarNC = async (ncId, updates) => {
     const updated = await dataService.updateNC(ncId, updates);
@@ -3121,9 +3214,13 @@ const VistaSupervisor = ({ t, currentUser }) => {
                 )}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <ButtonSm t={t} onClick={() => setObservarTest(enAprobacion)}>
                 <MessageSquare size={12} /> Observar
+              </ButtonSm>
+              {/* v6: quitar de la cola SIN abrir NC — solo marca como leído */}
+              <ButtonSm t={t} variant="warn" onClick={marcarLeidoAprobacion}>
+                <Eye size={12} /> Marcar como leído
               </ButtonSm>
               <ButtonSm t={t} variant="success" grow onClick={aprobarRechazo}>
                 Aprobar rechazo y abrir No Conformidad
@@ -3404,6 +3501,8 @@ const AdminDashboard = ({ t }) => {
                     e.accion === 'APPROVE' ? 'success' :
                     e.accion === 'OBSERVE' ? 'accent' :
                     e.accion === 'READ' ? 'success' :
+                    e.accion === 'MARK_READ' ? 'warn' :
+                    e.accion === 'AUTO_PENDIENTE' ? 'warn' :
                     e.accion === 'CLOSE_NC' ? 'success' :
                     'default'
                   } t={t} mono>{e.accion}</Pill>
@@ -3864,7 +3963,14 @@ const VistaAuditor = ({ t, currentUser }) => {
                   })}
                 </span>
                 <span style={{ textAlign: 'center' }}>
-                  <Pill variant={e.accion === 'CREATE' ? 'info' : e.accion === 'APPROVE' ? 'success' : 'default'} t={t} mono>{e.accion}</Pill>
+                  <Pill variant={
+                    e.accion === 'CREATE' ? 'info' :
+                    e.accion === 'APPROVE' ? 'success' :
+                    e.accion === 'MARK_READ' ? 'warn' :
+                    e.accion === 'AUTO_PENDIENTE' ? 'warn' :
+                    e.accion === 'CLOSE_NC' ? 'success' :
+                    'default'
+                  } t={t} mono>{e.accion}</Pill>
                 </span>
                 <div>
                   <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text }}>{e.desc}</div>
