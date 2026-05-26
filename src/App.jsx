@@ -271,6 +271,18 @@ const dataService = {
     return true
   },
 
+  // Crea (o resetea) el usuario en Supabase Auth via función SECURITY DEFINER.
+  // Solo admins pueden llamarla. Contraseña por defecto: Cambio123!
+  async createAuthUser(legajo, password = 'Cambio123!') {
+    const { data, error } = await supabase.rpc('admin_create_auth_user', {
+      p_legajo:   legajo.trim(),
+      p_password: password,
+    })
+    console.log('createAuthUser rpc:', { legajo, data, error })
+    if (error) { console.error('createAuthUser:', error); return { ok: false, error: error.message } }
+    return data  // { ok: true, user_id, email } | { ok: false, error }
+  },
+
   // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
   // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
@@ -948,13 +960,15 @@ const dataService = {
         tomadaAt:          tomadaUTC,
         cerradaPor:        supervisorNombre,
         cerradaAt:         cierreUTC,
-        causaRaiz:         nc.causa_raiz,
-        causaRaizDetalle:  '',                              // no existe en schema
-        accionesTomadas:   nc.acciones_tomadas || [],       // array embebido
-        notasCierre:       nc.notas_cierre,
-        diasParaCierre:    nc.dias_para_cierre,
-        timestamp:         aperturaUTC,
-        aperturaAt:        aperturaUTC
+        causaRaiz:              nc.causa_raiz,
+        accionesTomadas:        nc.acciones_tomadas || [],
+        notasCierre:            nc.notas_cierre,
+        diasParaCierre:         nc.dias_para_cierre,
+        legajoCierre:           nc.legajo_cierre,
+        cabezalesVerificados:   nc.cabezales_verificados ?? null,
+        kgMerma:                nc.kg_merma ?? null,
+        timestamp:              aperturaUTC,
+        aperturaAt:             aperturaUTC
       }
     })
   },
@@ -1032,12 +1046,15 @@ const dataService = {
 
     // Mapeo de updates del modelo interno → schema real
     const supabaseUpdates = {}
-    if (updates.estado)              supabaseUpdates.estado            = updates.estado
-    if (updates.causaRaiz)           supabaseUpdates.causa_raiz        = updates.causaRaiz
-    if (updates.notasCierre)         supabaseUpdates.notas_cierre      = updates.notasCierre
-    if (updates.tomadaAt)            supabaseUpdates.timestamp_analisis = updates.tomadaAt
-    if (updates.cerradaAt)           supabaseUpdates.timestamp_cierre   = updates.cerradaAt
-    if (updates.supervisorLegajo)    supabaseUpdates.supervisor_legajo  = updates.supervisorLegajo
+    if (updates.estado)                        supabaseUpdates.estado                = updates.estado
+    if (updates.causaRaiz !== undefined)       supabaseUpdates.causa_raiz            = updates.causaRaiz
+    if (updates.notasCierre !== undefined)     supabaseUpdates.notas_cierre          = updates.notasCierre
+    if (updates.tomadaAt)                      supabaseUpdates.timestamp_analisis    = updates.tomadaAt
+    if (updates.cerradaAt)                     supabaseUpdates.timestamp_cierre      = updates.cerradaAt
+    if (updates.supervisorLegajo)              supabaseUpdates.supervisor_legajo     = updates.supervisorLegajo
+    if (updates.legajoCierre !== undefined)    supabaseUpdates.legajo_cierre         = updates.legajoCierre
+    if (updates.cabezalesVerificados !== undefined) supabaseUpdates.cabezales_verificados = updates.cabezalesVerificados
+    if (updates.kgMerma !== undefined)         supabaseUpdates.kg_merma              = updates.kgMerma
     // accionesTomadas se guarda como array embebido (no_conformidades.acciones_tomadas)
     if (Array.isArray(updates.accionesTomadas)) {
       supabaseUpdates.acciones_tomadas = updates.accionesTomadas
@@ -3598,8 +3615,16 @@ const AdminUsuarios = ({ t, currentUser }) => {
       }} />}
 
       {showAddManual && <ModalAgregarUsuario t={t} onClose={() => setShowAddManual(false)} onAdd={async (u) => {
+        // 1) Crear fila en tabla usuarios
         await dataService.addUsers([u]);
-        await dataService.logEvent({ accion: 'CREATE', usuario: `${currentUser.nombre}`, desc: `Creó usuario ${u.legajo}` });
+        // 2) Crear entrada en Supabase Auth (contraseña genérica Cambio123!, fuerza cambio)
+        const authResult = await dataService.createAuthUser(u.legajo, 'Cambio123!');
+        console.log('onAdd createAuthUser result:', authResult);
+        await dataService.logEvent({
+          accion: 'CREATE',
+          usuario: `${currentUser.nombre}`,
+          desc: `Creó usuario ${u.legajo} · auth: ${authResult?.ok ? 'OK' : 'ERROR'}`
+        });
         setShowAddManual(false);
         refresh();
       }} />}
@@ -3709,8 +3734,16 @@ const ModalAgregarUsuario = ({ t, onClose, onAdd }) => {
   const [rol, setRol] = useState('operario');
   const [maquina, setMaquina] = useState('');
   const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const valido = legajo && nombre && apellido && rol;
+
+  const handleCrear = async () => {
+    if (!valido || loading) return;
+    setLoading(true);
+    await onAdd({ legajo, nombre, apellido, rol, maquina_asignada: maquina || null, email });
+    setLoading(false);
+  };
 
   return (
     <ModalShell t={t} title="Crear usuario manualmente" onClose={onClose}>
@@ -3747,7 +3780,7 @@ const ModalAgregarUsuario = ({ t, onClose, onAdd }) => {
           </div>
         )}
         <div style={{ gridColumn: '1 / -1' }}>
-          <Label t={t}>Email</Label>
+          <Label t={t}>Email (opcional)</Label>
           <Input t={t} value={email} onChange={e => setEmail(e.target.value)} placeholder="[email protected]" />
         </div>
       </div>
@@ -3755,15 +3788,15 @@ const ModalAgregarUsuario = ({ t, onClose, onAdd }) => {
       <div style={{ background: t.infoSoft, padding: 10, borderRadius: 6, marginBottom: 16 }}>
         <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.info, letterSpacing: '0.1em', marginBottom: 4 }}>CONTRASEÑA INICIAL</div>
         <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.text }}>
-          Se asigna <span style={{ fontFamily: 'JetBrains Mono', color: t.accent }}>cambio123</span>. El usuario debe cambiarla en su primer ingreso.
+          Se asigna <span style={{ fontFamily: 'JetBrains Mono', color: t.accent }}>Cambio123!</span>. El usuario deberá cambiarla en su primer ingreso.
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <ButtonSm t={t} grow onClick={onClose}>Cancelar</ButtonSm>
-        <ButtonSm t={t} variant="accent" grow disabled={!valido} onClick={() => onAdd({
-          legajo, nombre, apellido, rol, maquina_asignada: maquina || null, email
-        })}>Crear usuario</ButtonSm>
+        <ButtonSm t={t} grow onClick={onClose} disabled={loading}>Cancelar</ButtonSm>
+        <ButtonSm t={t} variant="accent" grow disabled={!valido || loading} onClick={handleCrear}>
+          {loading ? 'Creando…' : 'Crear usuario'}
+        </ButtonSm>
       </div>
     </ModalShell>
   );
@@ -3996,6 +4029,327 @@ const VistaAuditor = ({ t, currentUser }) => {
         </div>
       </Card>
     </div>
+  );
+};
+
+// =================================================================
+// MODAL OBSERVAR (supervisor → operario)
+// =================================================================
+
+const ModalObservar = ({ test, onClose, onSend, t }) => {
+  const [mensaje, setMensaje] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSend = async () => {
+    if (!mensaje.trim() || loading) return;
+    setLoading(true);
+    await onSend(mensaje.trim());
+    setLoading(false);
+  };
+
+  return (
+    <ModalShell t={t} title={`Observación sobre ${test.id}`} onClose={onClose}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{
+          padding: '10px 14px', background: t.surfaceHi, borderRadius: 6,
+          fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginBottom: 12
+        }}>
+          <strong style={{ color: t.text }}>{test.maquina}</strong> · {test.operario} · caja {test.caja} · lote{' '}
+          <span style={{ fontFamily: 'JetBrains Mono', color: t.accent }}>{test.lote}</span>
+        </div>
+        <Label t={t}>Mensaje al operario <Asterisk t={t} /></Label>
+        <textarea
+          value={mensaje}
+          onChange={e => setMensaje(e.target.value)}
+          rows={4}
+          placeholder="Describí la observación o instrucción para el operario..."
+          style={{
+            width: '100%', padding: 12, borderRadius: 6,
+            background: t.surfaceHi, border: `1px solid ${t.border}`,
+            color: t.text, fontFamily: 'Manrope', fontSize: 13,
+            boxSizing: 'border-box', outline: 'none', resize: 'vertical'
+          }}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <ButtonSm t={t} grow onClick={onClose} disabled={loading}>Cancelar</ButtonSm>
+        <ButtonSm t={t} variant="accent" grow disabled={!mensaje.trim() || loading} onClick={handleSend}>
+          <Send size={12} /> {loading ? 'Enviando…' : 'Enviar observación'}
+        </ButtonSm>
+      </div>
+    </ModalShell>
+  );
+};
+
+// =================================================================
+// MODAL GESTIONAR NC (supervisor — análisis y cierre)
+// =================================================================
+
+const CAUSAS_RAIZ = [
+  { value: 'MP',         label: 'Materia prima',          desc: 'Falla originada en la MP recibida' },
+  { value: 'PROCESO',    label: 'Proceso de producción',  desc: 'Falla generada durante el proceso' },
+  { value: 'MAQUINARIA', label: 'Maquinaria / equipo',    desc: 'Falla atribuible a la máquina' },
+  { value: 'OPERARIO',   label: 'Error de operario',      desc: 'Error humano en la operación' },
+  { value: 'OTRO',       label: 'Otro',                   desc: 'Causa no clasificada en las anteriores' },
+];
+
+const GRAMOS_POR_CABEZAL = 18.4; // g
+
+const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
+  const [loading, setLoading] = useState(false);
+
+  // Campos para el cierre
+  const [legajoCierre,         setLegajoCierre]         = useState(nc.legajoCierre         || currentUser.legajo);
+  const [cabezalesVerificados, setCabezalesVerificados] = useState(nc.cabezalesVerificados ?? '');
+  const [causaRaiz,            setCausaRaiz]            = useState(nc.causaRaiz             || '');
+  const [notasCierre,          setNotasCierre]          = useState(nc.notasCierre           || '');
+
+  // kg merma calculados automáticamente
+  const kgMerma = cabezalesVerificados !== '' && !isNaN(Number(cabezalesVerificados))
+    ? (Number(cabezalesVerificados) * GRAMOS_POR_CABEZAL / 1000).toFixed(3)
+    : null;
+
+  // Tiempo transcurrido desde apertura (actualizado cada 30s)
+  const [tiempoAbierta, setTiempoAbierta] = useState('');
+  useEffect(() => {
+    const calcular = () => {
+      const fin = nc.cerradaAt ? new Date(nc.cerradaAt).getTime() : Date.now();
+      const ms  = fin - new Date(nc.aperturaAt || nc.timestamp).getTime();
+      const min = Math.floor(ms / 60000);
+      if (min < 60) setTiempoAbierta(`${min} min`);
+      else {
+        const hr = Math.floor(min / 60);
+        setTiempoAbierta(`${hr}h ${min % 60}m`);
+      }
+    };
+    calcular();
+    if (nc.estado !== 'CERRADA') {
+      const iv = setInterval(calcular, 30000);
+      return () => clearInterval(iv);
+    }
+  }, [nc.aperturaAt, nc.timestamp, nc.cerradaAt, nc.estado]);
+
+  const cerrarNC = async () => {
+    if (!causaRaiz) return;
+    setLoading(true);
+    await onUpdate(nc.supabase_id || nc.id, {
+      estado:               'CERRADA',
+      causaRaiz,
+      notasCierre:          notasCierre || null,
+      legajoCierre:         legajoCierre.trim(),
+      cabezalesVerificados: cabezalesVerificados !== '' ? Number(cabezalesVerificados) : null,
+      kgMerma:              kgMerma !== null ? Number(kgMerma) : null,
+      cerradaAt:            new Date().toISOString(),
+    });
+    setLoading(false);
+  };
+
+  const esCerrada = nc.estado === 'CERRADA';
+
+  const causaLabel = CAUSAS_RAIZ.find(c => c.value === (nc.causaRaiz || causaRaiz))?.label || '';
+
+  return (
+    <ModalShell t={t} title={`Gestión NC · ${nc.id}`} onClose={onClose}>
+
+      {/* Encabezado de la NC */}
+      <div style={{
+        padding: '12px 14px', background: t.surfaceHi, borderRadius: 8,
+        border: `1px solid ${t.border}`, marginBottom: 18
+      }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          <Pill variant={esCerrada ? 'success' : esEnAnalisis ? 'warn' : 'danger'} t={t} mono>
+            {nc.estado}
+          </Pill>
+          {nc.tipos?.some(tid => TIPOS_FALLA.find(tf => tf.id === tid)?.gravedad === 'CRITICA') && (
+            <Pill variant="crit" t={t}>● CRÍTICA</Pill>
+          )}
+          {nc.tipos?.map(tid => {
+            const tf = TIPOS_FALLA.find(x => x.id === tid);
+            return <Pill key={tid} variant={tf?.gravedad === 'CRITICA' ? 'crit' : 'danger'} t={t}>{tf?.nombre}</Pill>;
+          })}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>
+          <span><strong style={{ color: t.text }}>Máquina:</strong> {nc.maquina}</span>
+          <span><strong style={{ color: t.text }}>Operario:</strong> {nc.operario}</span>
+          <span><strong style={{ color: t.text }}>Prueba:</strong> {nc.pruebaId || '—'}</span>
+          <span><strong style={{ color: t.text }}>Cabezales originales:</strong> {nc.cabezalesFalla ?? '—'} de 20</span>
+        </div>
+        {nc.observaciones && (
+          <div style={{
+            marginTop: 10, padding: '8px 12px', background: t.surface, borderRadius: 6,
+            fontFamily: 'Manrope', fontSize: 12, color: t.text, borderLeft: `3px solid ${t.warn}`
+          }}>
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim }}>OBS OPERARIO </span>
+            {nc.observaciones}
+          </div>
+        )}
+      </div>
+
+      {/* Cronómetro pallet */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 14px', borderRadius: 8, marginBottom: 18,
+        background: esCerrada ? t.successSoft : t.warnSoft,
+        border: `1px solid ${esCerrada ? t.success : t.warn}40`
+      }}>
+        <Clock size={16} color={esCerrada ? t.success : t.warn} />
+        <div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.1em' }}>
+            TIEMPO PALLET EN SALA
+          </div>
+          <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 20, fontWeight: 600, color: esCerrada ? t.success : t.warn }}>
+            {tiempoAbierta || '…'}
+          </div>
+          {esCerrada && (
+            <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted }}>
+              Cerrada {nc.cerradaAt ? new Date(nc.cerradaAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' }) : ''}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Formulario de cierre — disponible apenas se abre la NC */}
+      {(!esCerrada) && (
+        <div>
+          <div style={{
+            fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim,
+            letterSpacing: '0.1em', marginBottom: 14
+          }}>DATOS DE CIERRE</div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            {/* Legajo de cierre */}
+            <div>
+              <Label t={t}>Legajo responsable de cierre</Label>
+              {esCerrada
+                ? <div style={{ fontFamily: 'JetBrains Mono', fontSize: 14, color: t.text, padding: '10px 0' }}>
+                    {nc.legajoCierre || nc.supervisorLegajo || '—'}
+                  </div>
+                : <Input t={t} value={legajoCierre} onChange={e => setLegajoCierre(e.target.value)} placeholder={currentUser.legajo} />
+              }
+            </div>
+
+            {/* Causa raíz */}
+            <div>
+              <Label t={t}>Causa raíz del rechazo <Asterisk t={t} /></Label>
+              {esCerrada
+                ? <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, padding: '10px 0' }}>
+                    {causaLabel || nc.causaRaiz || '—'}
+                  </div>
+                : <select
+                    value={causaRaiz}
+                    onChange={e => setCausaRaiz(e.target.value)}
+                    style={{
+                      width: '100%', padding: '10px 12px', borderRadius: 6,
+                      background: t.surfaceHi, border: `1px solid ${!causaRaiz ? t.danger : t.border}`,
+                      color: causaRaiz ? t.text : t.textMuted,
+                      fontFamily: 'Manrope', fontSize: 13, outline: 'none', cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">— Seleccioná la causa —</option>
+                    {CAUSAS_RAIZ.map(c => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+              }
+            </div>
+          </div>
+
+          {/* Cabezales verificados + kg merma */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <Label t={t}>Cabezales con falla (planilla)</Label>
+              {esCerrada
+                ? <div style={{ fontFamily: 'JetBrains Mono', fontSize: 14, color: t.text, padding: '10px 0' }}>
+                    {nc.cabezalesVerificados ?? '—'}
+                  </div>
+                : <Input t={t} type="number" min="0" max="9999"
+                    value={cabezalesVerificados}
+                    onChange={e => setCabezalesVerificados(e.target.value)}
+                    placeholder="Ej: 3"
+                  />
+              }
+            </div>
+            <div>
+              <Label t={t}>Kg de merma</Label>
+              <div style={{
+                padding: '10px 12px', borderRadius: 6,
+                background: kgMerma || nc.kgMerma ? t.dangerSoft : t.surfaceHi,
+                border: `1px solid ${kgMerma || nc.kgMerma ? t.danger + '60' : t.border}`,
+                fontFamily: 'JetBrains Mono', fontSize: 16, fontWeight: 600,
+                color: kgMerma || nc.kgMerma ? t.danger : t.textMuted
+              }}>
+                {esCerrada
+                  ? (nc.kgMerma != null ? `${Number(nc.kgMerma).toFixed(3)} kg` : '—')
+                  : (kgMerma != null ? `${kgMerma} kg` : '—')
+                }
+              </div>
+              <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 4 }}>
+                {GRAMOS_POR_CABEZAL}g × cabezales
+              </div>
+            </div>
+          </div>
+
+          {/* Nota adicional */}
+          <div style={{ marginBottom: 18 }}>
+            <Label t={t}>Nota adicional</Label>
+            {esCerrada
+              ? <div style={{
+                  padding: '10px 12px', background: t.surfaceHi, borderRadius: 6,
+                  fontFamily: 'Manrope', fontSize: 13, color: t.text,
+                  border: `1px solid ${t.border}`, minHeight: 60
+                }}>
+                  {nc.notasCierre || <span style={{ color: t.textMuted }}>Sin nota registrada</span>}
+                </div>
+              : <textarea
+                  value={notasCierre}
+                  onChange={e => setNotasCierre(e.target.value)}
+                  rows={3}
+                  placeholder="Acciones tomadas, destino del lote rechazado, responsable de la disposición..."
+                  style={{
+                    width: '100%', padding: 12, borderRadius: 6,
+                    background: t.surfaceHi, border: `1px solid ${t.border}`,
+                    color: t.text, fontFamily: 'Manrope', fontSize: 13,
+                    boxSizing: 'border-box', outline: 'none', resize: 'vertical'
+                  }}
+                />
+            }
+          </div>
+
+          {/* Botón cerrar NC */}
+          {!esCerrada && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <ButtonSm t={t} grow onClick={onClose} disabled={loading}>Cancelar</ButtonSm>
+              <ButtonSm
+                t={t} variant="success" grow
+                disabled={!causaRaiz || loading}
+                onClick={cerrarNC}
+              >
+                <CheckCircle2 size={12} />
+                {loading ? 'Cerrando…' : !causaRaiz ? 'Seleccioná causa raíz' : 'Cerrar No Conformidad'}
+              </ButtonSm>
+            </div>
+          )}
+          {esCerrada && (
+            <div style={{
+              padding: '10px 14px', background: t.successSoft, borderRadius: 8,
+              display: 'flex', alignItems: 'center', gap: 10,
+              border: `1px solid ${t.success}40`
+            }}>
+              <CheckCircle2 size={16} color={t.success} />
+              <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.success }}>
+                NC cerrada · {nc.cerradaAt
+                  ? new Date(nc.cerradaAt).toLocaleString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
+                      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                    })
+                  : ''
+                }
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </ModalShell>
   );
 };
 
