@@ -271,33 +271,31 @@ const dataService = {
     return true
   },
 
-  // LOGIN — busca por legajo y compara password en cliente
-  // Esto evita problemas de encoding, espacios y collation de Supabase
+  // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
+  // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
+    const email = `${legajo.trim()}@sides.internal`
+
+    // 1) Autenticar con Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+    console.log('login - supabase auth:', { email, user: authData?.user ? 'ok' : 'null', authError })
+
+    if (authError || !authData?.user) {
+      console.log('login: auth fallido', authError?.message)
+      return null
+    }
+
+    // 2) Traer perfil completo desde la tabla usuarios (roles, máquina, etc.)
     const { data, error } = await supabase
       .from('usuarios')
       .select('*')
       .eq('legajo', legajo.trim())
       .maybeSingle()
 
-    console.log('login - búsqueda por legajo:', { legajo, data: data ? 'encontrado' : 'null', error })
+    console.log('login - perfil usuarios:', { data: data ? 'encontrado' : 'null', error })
 
-    if (error) { console.error('login error:', error); return null }
-    if (!data) { console.log('login: legajo no existe'); return null }
-
-    // Comparamos password en cliente con trim() para eliminar espacios fantasma.
-    // Lee de password_hash (nombre real de la columna) en plain-text — deuda
-    // ISO 27001 conocida que se cierra al migrar a Supabase Auth o a una
-    // Edge Function `verificar_login` con bcrypt server-side.
-    const passwordMatch = data.password_hash?.trim() === password?.trim()
-    console.log('login - password check:', {
-      storedLen: data.password_hash?.length,
-      enteredLen: password?.length,
-      match: passwordMatch,
-      activo: data.activo
-    })
-
-    if (!passwordMatch) { console.log('login: password incorrecto'); return null }
+    if (error) { console.error('login perfil error:', error); return null }
+    if (!data) { console.log('login: perfil no encontrado en usuarios'); return null }
     if (data.activo === false) { console.log('login: usuario inactivo'); return null }
 
     const user = mapUserFromDb(data)
@@ -307,36 +305,46 @@ const dataService = {
   },
 
   async logout() {
-    console.log('logout current user cleared')
+    await supabase.auth.signOut()
     sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
+    console.log('logout: sesión cerrada')
   },
 
   async getCurrentUser() {
-    const stored = sessionStorage.getItem('tz_current_user')
+    // Verificar que siga habiendo sesión activa en Supabase Auth
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
+      return null
+    }
+    const stored = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)
     return stored ? JSON.parse(stored) : null
   },
 
   async changePassword(legajo, newPass) {
+    // 1) Cambiar la contraseña en Supabase Auth (la sesión activa ya tiene el token)
+    const { error: authError } = await supabase.auth.updateUser({ password: newPass })
+    console.log('changePassword auth response:', { legajo, authError })
+    if (authError) { console.error('changePassword auth:', authError); return null }
+
+    // 2) Actualizar fuerza_cambio y fecha en la tabla usuarios
     const { data, error } = await supabase
       .from('usuarios')
       .update({
-        password_hash:        newPass,        // schema real: password_hash
-        fuerza_cambio:        false,          // schema real: fuerza_cambio
+        fuerza_cambio:        false,
         cambio_password_date: new Date().toISOString()
+        // password_hash ya no se guarda — la contraseña vive en Supabase Auth
       })
       .eq('legajo', legajo)
       .select()
       .maybeSingle()
 
-    console.log('changePassword supabase response:', { legajo, data, error })
-    if (error) { console.error('changePassword:', error); return null }
-    if (!data) {
-      console.log('changePassword: usuario no encontrado', { legajo })
-      return null
-    }
+    console.log('changePassword usuarios response:', { legajo, data, error })
+    if (error) { console.error('changePassword usuarios:', error); return null }
+    if (!data) { console.log('changePassword: usuario no encontrado', { legajo }); return null }
 
     const updatedUser = mapUserFromDb(data)
-    const current = await this.getCurrentUser()  // FIX: faltaba await
+    const current = await this.getCurrentUser()
     if (current?.legajo === legajo) {
       sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser))
     }
