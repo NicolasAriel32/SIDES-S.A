@@ -83,9 +83,9 @@ const parsearCodigoProducto = (codigo) => {
 };
 
 const RESPUESTAS_RAPIDAS = [
-  { id: 'rev', icon: Eye, texto: 'Revisá una caja al 100%' },
-  { id: 'mec', icon: Wrench, texto: 'Dar aviso a mecánico de sala' },
-  { id: 'cor', icon: AlertTriangle, texto: 'Realizar corte 5 cajas atrás' },
+  { id: 'rev', icon: Eye, texto: 'REVISAR UNA CAJA AL 100%' },
+  { id: 'mec', icon: Wrench, texto: 'AVISAR A MECÁNICO DE SALA' },
+  { id: 'prod', icon: AlertTriangle, texto: 'REVISAR EN PRODUCCIÓN' },
 ];
 
 // =================================================================
@@ -3681,15 +3681,24 @@ const VistaAuditor = ({ t, currentUser }) => {
 // =================================================================
 
 const ModalObservar = ({ test, onClose, onSend, t }) => {
+  const [seleccionadas, setSeleccionadas] = useState([]);
   const [mensaje, setMensaje] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const toggle = (id) => {
+    setSeleccionadas(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  };
+
   const handleSend = async () => {
-    if (!mensaje.trim() || loading) return;
+    const textos = [...seleccionadas.map(id => RESPUESTAS_RAPIDAS.find(r => r.id === id)?.texto).filter(Boolean)];
+    if (mensaje.trim()) textos.push(mensaje.trim());
+    if (textos.length === 0 || loading) return;
     setLoading(true);
-    await onSend(mensaje.trim());
+    await onSend(textos.join(' · '));
     setLoading(false);
   };
+
+  const puedeEnviar = (seleccionadas.length > 0 || mensaje.trim().length > 0) && !loading;
 
   return (
     <ModalShell t={t} title={`Observación sobre ${test.id}`} onClose={onClose}>
@@ -3701,12 +3710,32 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
           <strong style={{ color: t.text }}>{test.maquina}</strong> · {test.operario} · caja {test.caja} · lote{' '}
           <span style={{ fontFamily: 'JetBrains Mono', color: t.accent }}>{test.lote}</span>
         </div>
-        <Label t={t}>Mensaje al operario <Asterisk t={t} /></Label>
+
+        <Label t={t}>Mensajes predeterminados</Label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginBottom: 16 }}>
+          {RESPUESTAS_RAPIDAS.map(r => {
+            const selected = seleccionadas.includes(r.id);
+            return (
+              <button key={r.id} type="button" onClick={() => toggle(r.id)} style={{
+                padding: '10px 12px', borderRadius: 6, cursor: 'pointer',
+                background: selected ? t.accentSoft : t.surfaceHi,
+                border: `1px solid ${selected ? t.accent : t.border}`,
+                color: selected ? t.accent : t.text,
+                fontFamily: 'Manrope', fontSize: 12, fontWeight: 600,
+                textAlign: 'center'
+              }}>
+                {r.texto}
+              </button>
+            );
+          })}
+        </div>
+
+        <Label t={t}>Observación adicional (opcional)</Label>
         <textarea
           value={mensaje}
           onChange={e => setMensaje(e.target.value)}
           rows={4}
-          placeholder="Describí la observación o instrucción para el operario..."
+          placeholder="Agregá una observación adicional..."
           style={{
             width: '100%', padding: 12, borderRadius: 6,
             background: t.surfaceHi, border: `1px solid ${t.border}`,
@@ -3717,7 +3746,7 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <ButtonSm t={t} grow onClick={onClose} disabled={loading}>Cancelar</ButtonSm>
-        <ButtonSm t={t} variant="accent" grow disabled={!mensaje.trim() || loading} onClick={handleSend}>
+        <ButtonSm t={t} variant="accent" grow disabled={!puedeEnviar} onClick={handleSend}>
           <Send size={12} /> {loading ? 'Enviando…' : 'Enviar observación'}
         </ButtonSm>
       </div>
@@ -3789,6 +3818,7 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
   };
 
   const esCerrada = nc.estado === 'CERRADA';
+  const esEnAnalisis = nc.estado === 'EN ANALISIS';
 
   const causaLabel = CAUSAS_RAIZ.find(c => c.value === (nc.causaRaiz || causaRaiz))?.label || '';
 
