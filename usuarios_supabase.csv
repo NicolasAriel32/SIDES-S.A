@@ -1,0 +1,11 @@
+id,email,nombre,apellido,rol,turno,activo,created_at
+550e8400-e29b-41d4-a716-446655440001,nicolas.gimenez38@gmail.com,Nicolás,Giménez,administrador,mañana,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440002,carlos.mendez@empresa.com,Carlos,Méndez,supervisor,mañana,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440003,laura.rodriguez@empresa.com,Laura,Rodríguez,supervisor,tarde,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440004,pablo.garcia@empresa.com,Pablo,García,operario,mañana,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440005,maria.lopez@empresa.com,María,López,operario,mañana,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440006,diego.fernandez@empresa.com,Diego,Fernández,operario,tarde,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440007,ana.martinez@empresa.com,Ana,Martínez,operario,tarde,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440008,jorge.perez@empresa.com,Jorge,Pérez,operario,noche,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440009,sofia.gonzalez@empresa.com,Sofía,González,operario,noche,true,2026-05-25T08:00:00Z
+550e8400-e29b-41d4-a716-446655440010,roberto.sanchez@empresa.com,Roberto,Sánchez,auditor,mañana,true,2026-05-25T08:00:00Z

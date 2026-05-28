@@ -1104,6 +1104,30 @@ const FONT_IMPORT = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0.6; }
   }
+  @keyframes neonPulseStrong {
+    0%, 100% {
+      box-shadow: 0 0 0 2px #e0b56a, 0 0 18px #e0b56a99, 0 0 40px #e0b56a55, 0 8px 32px rgba(0,0,0,0.5);
+    }
+    50% {
+      box-shadow: 0 0 0 3px #f5d07a, 0 0 32px #f5d07acc, 0 0 64px #e0b56a88, 0 8px 32px rgba(0,0,0,0.5);
+    }
+  }
+  @keyframes borderFlash {
+    0%, 100% { border-color: #e0b56a; }
+    50%       { border-color: #ffffff; }
+  }
+  @keyframes bellShake {
+    0%, 100% { transform: rotate(0deg); }
+    15%      { transform: rotate(-18deg); }
+    30%      { transform: rotate(14deg); }
+    45%      { transform: rotate(-10deg); }
+    60%      { transform: rotate(6deg); }
+    75%      { transform: rotate(-3deg); }
+  }
+  @keyframes dotBlink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.25; transform: scale(0.65); }
+  }
 `;
 
 // =================================================================
@@ -1221,48 +1245,48 @@ const ToastObservacion = ({ obs, onConfirm, t }) => (
     position: 'fixed',
     top: 80,
     right: 24,
-    width: 380,
+    width: 400,
     background: `linear-gradient(135deg, ${t.surface}, ${t.surfaceHi})`,
-    border: `2px solid ${t.warn}`,
+    border: `3px solid ${t.warn}`,
     borderRadius: 10,
-    boxShadow: `0 8px 32px rgba(0,0,0,0.35), 0 0 16px ${t.warnSoft}`,
     zIndex: 200,
-    animation: 'slideInRight 0.3s ease-out, neonPulse 2.2s ease-in-out infinite',
+    animation: 'slideInRight 0.3s ease-out, neonPulseStrong 1.6s ease-in-out infinite, borderFlash 2.4s ease-in-out infinite',
     overflow: 'hidden'
   }}>
     <div style={{
-      padding: '12px 16px',
+      padding: '14px 16px',
       background: t.warnSoft,
-      borderBottom: `1px solid ${t.warn}40`,
+      borderBottom: `1px solid ${t.warn}60`,
       display: 'flex',
       alignItems: 'center',
-      gap: 10
+      gap: 12
     }}>
-      <BellRing size={18} color={t.warn} style={{ animation: 'pulse 1.5s infinite, blinkGlow 1.3s ease-in-out infinite' }} />
+      <BellRing size={22} color={t.warn} style={{ animation: 'bellShake 1.2s ease-in-out infinite', flexShrink: 0 }} />
       <div style={{ flex: 1 }}>
-        <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600, color: t.warn }}>
+        <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.warn }}>
           Nueva observación del supervisor
         </div>
-        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em' }}>
+        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em', marginTop: 2 }}>
           {new Date(obs.created_at || obs.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · {obs.supervisor_nombre || obs.supervisor || 'Supervisor'}
         </div>
       </div>
     </div>
-    <div style={{ padding: '14px 16px' }}>
+    <div style={{ padding: '16px' }}>
       <div style={{
-        fontFamily: 'Manrope', fontSize: 14, color: t.text, lineHeight: 1.5,
-        padding: 12, background: t.surfaceHi, borderRadius: 6, marginBottom: 12,
-        borderLeft: `3px solid ${t.warn}`
+        fontFamily: 'Manrope', fontSize: 16, fontWeight: 500, color: '#ffffff', lineHeight: 1.55,
+        padding: 14, background: '#22220a', borderRadius: 6, marginBottom: 14,
+        borderLeft: `4px solid ${t.warn}`
       }}>
         "{obs.mensaje}"
       </div>
       <button onClick={onConfirm} style={{
-        width: '100%', padding: 12, background: t.warn, color: t.bg,
+        width: '100%', padding: 14, background: t.warn, color: t.bg,
         border: 'none', borderRadius: 6, cursor: 'pointer',
-        fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+        fontFamily: 'Bricolage Grotesque', fontSize: 15, fontWeight: 700,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        letterSpacing: '0.01em'
       }}>
-        <CheckCircle2 size={16} />
+        <CheckCircle2 size={17} />
         OK, recibido
       </button>
     </div>
@@ -1274,26 +1298,31 @@ const BannerObservaciones = ({ observaciones, onMarkRead, t }) => {
   if (!observaciones || observaciones.length === 0) return null;
 
   return (
-    <Card t={t} padding={0} style={{
+    <div style={{
       marginBottom: 16,
       background: t.warnSoft,
-      borderColor: t.warn,
+      border: `3px solid ${t.warn}`,
+      borderRadius: 8,
       overflow: 'hidden',
-      boxShadow: `0 0 24px rgba(255, 194, 0, 0.22)`,
-      animation: 'neonPulse 2.2s ease-in-out infinite'
+      animation: 'neonPulseStrong 1.6s ease-in-out infinite, borderFlash 2.4s ease-in-out infinite'
     }}>
       <div style={{
-        padding: '10px 16px',
+        padding: '12px 16px',
         background: t.warn,
         color: t.bg,
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         fontFamily: 'Bricolage Grotesque',
-        fontSize: 14,
-        fontWeight: 600
+        fontSize: 16,
+        fontWeight: 700,
+        letterSpacing: '0.01em'
       }}>
-        <Inbox size={16} />
+        <div style={{
+          width: 10, height: 10, borderRadius: '50%', background: t.bg,
+          animation: 'dotBlink 1s ease-in-out infinite', flexShrink: 0
+        }} />
+        <Inbox size={18} />
         {observaciones.length} {observaciones.length === 1 ? 'mensaje del supervisor' : 'mensajes del supervisor'}
       </div>
       <div>
@@ -1304,23 +1333,34 @@ const BannerObservaciones = ({ observaciones, onMarkRead, t }) => {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            gap: 14
+            gap: 14,
+            background: '#2e2415'
           }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.warn, letterSpacing: '0.1em', marginBottom: 6 }}>
                 {new Date(obs.created_at || obs.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · {obs.supervisor_nombre || obs.supervisor || 'Supervisor'}
               </div>
-              <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, lineHeight: 1.5 }}>
+              <div style={{ fontFamily: 'Manrope', fontSize: 15, fontWeight: 500, color: '#ffffff', lineHeight: 1.55 }}>
                 "{obs.mensaje}"
               </div>
             </div>
-            <ButtonSm t={t} variant="warn" onClick={() => onMarkRead(obs.id)}>
-              <CheckCircle2 size={12} /> Recibido
-            </ButtonSm>
+            <button
+              onClick={() => onMarkRead(obs.id)}
+              style={{
+                padding: '8px 12px', borderRadius: 6,
+                border: `1px solid ${t.warn}`,
+                color: t.warn, background: '#3a2e10',
+                fontFamily: 'Manrope', fontSize: 13, fontWeight: 700,
+                cursor: 'pointer', whiteSpace: 'nowrap',
+                display: 'flex', alignItems: 'center', gap: 5
+              }}
+            >
+              <CheckCircle2 size={14} /> Recibido
+            </button>
           </div>
         ))}
       </div>
-    </Card>
+    </div>
   );
 };
 
@@ -2493,6 +2533,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [ncHistory, setNcHistory] = useState([]);
   const [unreadObs, setUnreadObs] = useState([]);
   const [gestionarNC, setGestionarNC] = useState(null);
+  const [aprobandoNC, setAprobandoNC] = useState(false);
   // FIX v5: alerta in-app cuando llega una prueba RECHAZADA recién cargada
   const [alertaFalla, setAlertaFalla] = useState(null);
   // FIX v5: tab activa (turno actual / historial)
@@ -2623,21 +2664,27 @@ const VistaSupervisor = ({ t, currentUser }) => {
   }
 
   const aprobarRechazo = async () => {
-    await dataService.updateTest(enAprobacion.id, { esperandoAprobacion: false, aprobado: true });
-    await dataService.createNC({
-      pruebaId: enAprobacion.id,
-      maquina: enAprobacion.maquina,
-      operario: enAprobacion.operario,
-      tipos: enAprobacion.tipos,
-      cabezalesFalla: enAprobacion.cabezalesFalla,
-      observaciones: enAprobacion.observaciones,
-      aprobadoPor: `${currentUser.nombre} ${currentUser.apellido}`,
-    });
-    await dataService.logEvent({
-      accion: 'APPROVE', usuario: `${currentUser.nombre} ${currentUser.apellido}`,
-      desc: `Aprobado rechazo ${enAprobacion.id} · NC abierta`
-    });
-    reload();
+    if (aprobandoNC) return;
+    setAprobandoNC(true);
+    try {
+      await dataService.updateTest(enAprobacion.id, { esperandoAprobacion: false, aprobado: true });
+      await dataService.createNC({
+        pruebaId: enAprobacion.id,
+        maquina: enAprobacion.maquina,
+        operario: enAprobacion.operario,
+        tipos: enAprobacion.tipos,
+        cabezalesFalla: enAprobacion.cabezalesFalla,
+        observaciones: enAprobacion.observaciones,
+        aprobadoPor: `${currentUser.nombre} ${currentUser.apellido}`,
+      });
+      await dataService.logEvent({
+        accion: 'APPROVE', usuario: `${currentUser.nombre} ${currentUser.apellido}`,
+        desc: `Aprobado rechazo ${enAprobacion.id} · NC abierta`
+      });
+      reload();
+    } finally {
+      setAprobandoNC(false);
+    }
   };
 
   // v6: quitar de la cola sin abrir NC — solo marcar como revisado/leído
@@ -2891,8 +2938,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
               <ButtonSm t={t} variant="warn" onClick={marcarLeidoAprobacion}>
                 <Eye size={12} /> Marcar como leído
               </ButtonSm>
-              <ButtonSm t={t} variant="success" grow onClick={aprobarRechazo}>
-                Aprobar rechazo y abrir No Conformidad
+              <ButtonSm t={t} variant="success" grow onClick={aprobarRechazo} disabled={aprobandoNC}>
+                {aprobandoNC ? 'Procesando…' : 'Aprobar rechazo y abrir No Conformidad'}
               </ButtonSm>
             </div>
           </div>
