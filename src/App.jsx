@@ -1669,6 +1669,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [errorCodigo, setErrorCodigo] = useState('');
   const [caja, setCaja] = useState('');
   const [lote, setLote] = useState('');
+  const [loteAutocompletado, setLoteAutocompletado] = useState(false);
   const [obs, setObs] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1686,12 +1687,31 @@ const VistaOperario = ({ t, user, refresh }) => {
   // FIX v5: la señal del PLC ya NO se autogenera. La carga la dispara el botón
   // "Simular señal del PLC" (puente hasta que conectemos la I/O real). El init
   // solo deja al operario listo: máquina asignada + cuántas pruebas lleva el turno.
-  const recalcularContador = async (maquinaId) => {
+  const recalcularContador = async (maquinaId, autocompletar = false) => {
     // FIX v7: filtramos desde el inicio del turno activo, no por fecha calendario.
     // Así el turno noche (22:00→06:00) no se parte en dos al cruzar la medianoche.
     const allTests = await dataService.getTests(inicioTurnoActual());
     const delTurno = allTests.filter(test => test.maquina === maquinaId);
     setPruebasDelTurno(delTurno);
+
+    // Autocompletar lote y código de producto con el último registro de la máquina
+    if (autocompletar) {
+      const completadas = delTurno
+        .filter(t => t.lote && t.estadoFinal !== 'PENDIENTE')
+        .sort((a, b) => new Date(b.timestampSenal || b.timestamp) - new Date(a.timestampSenal || a.timestamp));
+      if (completadas.length > 0) {
+        const ultima = completadas[0];
+        if (ultima.lote) {
+          setLote(ultima.lote);
+          setLoteAutocompletado(true);
+        }
+        if (ultima.codigoProducto) {
+          setCodigoProducto(ultima.codigoProducto);
+          validarCodigo(ultima.codigoProducto);
+        }
+      }
+    }
+
     // numeroPrueba = cantidad de pruebas YA cerradas en el turno (sin PENDIENTE auto) + 1
     return delTurno.filter(test => test.estadoFinal !== 'PENDIENTE').length + 1;
   };
@@ -1710,8 +1730,8 @@ const VistaOperario = ({ t, user, refresh }) => {
       if (!m) m = machines[0] || null;
       setMaquinaInfo(m);
 
-      // Recalcular contador, sin crear prueba pendiente todavía
-      if (m?.id) await recalcularContador(m.id);
+      // Recalcular contador y autocompletar lote/producto con último registro de la máquina
+      if (m?.id) await recalcularContador(m.id, true);
       // pruebaPendiente queda en null hasta que el operario presione el botón
       setPruebaPendiente(null);
     };
@@ -1721,7 +1741,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   // FIX v5: botón manual para simular la señal del PLC
   const generarSenalPLC = async () => {
     if (!maquinaInfo?.id) return;
-    const numeroPrueba = await recalcularContador(maquinaInfo.id);
+    const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
     const ahora = new Date();
     // FIX v6: fecha del ID usa zona AR para que coincida con el día calendario local
     setPruebaPendiente({
@@ -1925,9 +1945,10 @@ const VistaOperario = ({ t, user, refresh }) => {
       setTimeout(async () => {
         setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
         setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
+        setLoteAutocompletado(false);
         setShowSuccess(false);
         setPruebaPendiente(null);
-        if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
+        if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id, true);
         refresh();
       }, 2200);
     } finally {
@@ -2223,8 +2244,21 @@ const VistaOperario = ({ t, user, refresh }) => {
                 <Input t={t} value={caja} onChange={e => setCaja(e.target.value)} placeholder="Ej: 0045" />
               </div>
               <div>
-                <Label t={t}>Número de lote <Asterisk t={t} /></Label>
-                <Input t={t} value={lote} onChange={e => setLote(e.target.value)} placeholder="Ej: 25232" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Label t={t} style={{ margin: 0 }}>Número de lote <Asterisk t={t} /></Label>
+                  {loteAutocompletado && (
+                    <span style={{
+                      fontFamily: 'JetBrains Mono', fontSize: 9, fontWeight: 600,
+                      color: t.success, background: t.successSoft,
+                      border: `1px solid ${t.success}40`,
+                      padding: '2px 6px', borderRadius: 4, letterSpacing: '0.06em'
+                    }}>↑ ÚLTIMO LOTE</span>
+                  )}
+                </div>
+                <Input t={t} value={lote} onChange={e => {
+                  setLote(e.target.value);
+                  setLoteAutocompletado(false);
+                }} placeholder="Ej: 25232" />
               </div>
             </div>
 
