@@ -1158,6 +1158,22 @@ const FONT_IMPORT = `
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.25; transform: scale(0.65); }
   }
+  @keyframes dangerPulse {
+    0%, 100% {
+      box-shadow: 0 0 0 2px #ff4d4d, 0 0 18px #ff4d4d99, 0 0 40px #ff4d4d55;
+    }
+    50% {
+      box-shadow: 0 0 0 4px #ff7070, 0 0 36px #ff4d4dcc, 0 0 72px #ff4d4d88;
+    }
+  }
+  @keyframes dangerBorderFlash {
+    0%, 100% { border-color: #ff4d4d; }
+    50%       { border-color: #ffffff; }
+  }
+  @keyframes textBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
 `;
 
 // =================================================================
@@ -2017,38 +2033,78 @@ const VistaOperario = ({ t, user, refresh }) => {
         <>
           <Card t={t} padding={24} style={{
             background: `linear-gradient(135deg, ${tiempoTranscurrido >= 3000 ? t.dangerSoft : t.warnSoft} 0%, ${t.surface} 60%)`,
-            borderColor: (tiempoTranscurrido >= 3000 ? t.danger : t.warn) + '60', marginBottom: 20
+            borderColor: (tiempoTranscurrido >= 3000 ? t.danger : t.warn) + '80',
+            marginBottom: 20,
+            animation: tiempoTranscurrido >= 3000
+              ? 'dangerPulse 1.2s ease-in-out infinite, dangerBorderFlash 1.2s ease-in-out infinite'
+              : 'neonPulseStrong 2s ease-in-out infinite',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <Pill variant="warn" t={t}>● PRUEBA PENDIENTE · #{pruebaPendiente.numeroSecuencial}</Pill>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                {/* Pill con blink si está crítico */}
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '4px 12px', borderRadius: 6,
+                  background: tiempoTranscurrido >= 3000 ? t.dangerSoft : t.warnSoft,
+                  border: `1px solid ${tiempoTranscurrido >= 3000 ? t.danger : t.warn}`,
+                  animation: tiempoTranscurrido >= 3000 ? 'textBlink 0.8s ease-in-out infinite' : 'none',
+                }}>
+                  <span style={{
+                    fontFamily: 'JetBrains Mono', fontSize: 13, fontWeight: 700,
+                    color: tiempoTranscurrido >= 3000 ? t.danger : t.warn,
+                    letterSpacing: '0.08em'
+                  }}>
+                    ● PRUEBA PENDIENTE · #{pruebaPendiente.numeroSecuencial}
+                  </span>
+                </div>
                 <div style={{ fontFamily: 'JetBrains Mono', fontSize: 24, color: t.text, fontWeight: 500, marginTop: 12 }}>
                   {pruebaPendiente.id}
                 </div>
                 <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 13, marginTop: 4 }}>
                   Señal recibida {pruebaPendiente.fechaSenalFormateada} · 20 cabezales para evaluar
                 </div>
-                {/* v6: aviso a los 50 min que se auto-guardará como PENDIENTE */}
+                {/* Aviso crítico a los 50 min */}
                 {tiempoTranscurrido >= 3000 && tiempoTranscurrido < LIMITE_PENDIENTE_SEG && (
                   <div style={{
-                    marginTop: 10, padding: '8px 12px',
-                    background: t.dangerSoft, border: `1px solid ${t.danger}60`,
-                    borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8
+                    marginTop: 12, padding: '10px 14px',
+                    background: t.dangerSoft, border: `2px solid ${t.danger}`,
+                    borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10
                   }}>
-                    <AlertTriangle size={14} color={t.danger} />
-                    <span style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, fontWeight: 500 }}>
-                      En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} se registrará automáticamente como PENDIENTE
-                    </span>
+                    <AlertTriangle size={18} color={t.danger} />
+                    <div>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 13, color: t.danger, fontWeight: 700, letterSpacing: '0.05em' }}>
+                        ⚠ COMPLETÁ EL REGISTRO AHORA
+                      </div>
+                      <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, marginTop: 2 }}>
+                        En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} se bloqueará automáticamente y no podrás modificarlo
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
-              <div style={{ textAlign: 'right' }}>
+              {/* Cronómetro */}
+              <div style={{ textAlign: 'right', minWidth: 90 }}>
                 <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.1em' }}>TRANSCURRIDO</div>
-                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 36, color: tiempoTranscurrido >= 3000 ? t.danger : t.warn, fontWeight: 500, lineHeight: 1 }}>
+                <div style={{
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: tiempoTranscurrido >= 3000 ? 44 : 36,
+                  color: tiempoTranscurrido >= 3000 ? t.danger : t.warn,
+                  fontWeight: 700, lineHeight: 1, marginTop: 4,
+                  animation: tiempoTranscurrido >= 3000 ? 'textBlink 1s ease-in-out infinite' : 'none',
+                }}>
                   {formatTiempo(tiempoTranscurrido)}
                 </div>
-                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 4 }}>
+                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 6 }}>
                   LÍMITE 60 MIN
+                </div>
+                {/* Barra de progreso del tiempo */}
+                <div style={{ marginTop: 8, height: 4, background: t.surfaceHi, borderRadius: 2, width: 90 }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    width: `${Math.min((tiempoTranscurrido / LIMITE_PENDIENTE_SEG) * 100, 100)}%`,
+                    background: tiempoTranscurrido >= 3000 ? t.danger : t.warn,
+                    transition: 'width 1s linear'
+                  }} />
                 </div>
               </div>
             </div>
@@ -2652,6 +2708,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
   const totalPruebas = tests.length;
   const pruebasRechazadas = tests.filter(t => t.estado === 'RECHAZADO').length;
+  // Pruebas que quedaron bloqueadas en PENDIENTE (no se pueden modificar)
+  const pruebasBloqueadas = tests.filter(t => t.estadoFinal === 'PENDIENTE').length;
   const tasaFalla = totalPruebas > 0 ? Math.round((pruebasRechazadas / totalPruebas) * 100) : 0;
   const totalIncidenciasTipos = paretoTurno.reduce((s, p) => s + p.cantidad, 0);
 
@@ -2871,14 +2929,35 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </Card>
       )}
 
+      {/* Banner pruebas bloqueadas */}
+      {pruebasBloqueadas > 0 && (
+        <div style={{
+          marginBottom: 16, padding: '12px 16px',
+          background: t.dangerSoft, border: `1px solid ${t.danger}60`,
+          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12
+        }}>
+          <AlertTriangle size={18} color={t.danger} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 700, color: t.danger }}>
+              {pruebasBloqueadas} {pruebasBloqueadas === 1 ? 'prueba quedó bloqueada' : 'pruebas quedaron bloqueadas'} en PENDIENTE este turno
+            </div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textMuted, letterSpacing: '0.05em', marginTop: 2 }}>
+              NO SE PUEDEN MODIFICAR · EL OPERARIO NO COMPLETÓ EL REGISTRO EN 60 MIN
+            </div>
+          </div>
+          <Pill variant="danger" t={t} mono>{pruebasBloqueadas}</Pill>
+        </div>
+      )}
+
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
         <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`de ${idealAhora * machinesIntegradas.length} previstas`} />
         <KPI t={t} label="Tasa de falla" value={`${tasaFalla}%`}
           sub={`${pruebasRechazadas} rechazos / ${totalPruebas} pruebas`}
           tone={tasaFalla > 5 ? 'warn' : 'success'} />
-        <KPI t={t} label="Esperan aprobación" value={enAprobacion ? '1' : '0'}
-          sub={enAprobacion ? 'rechazo pendiente' : 'cola vacía'} tone={enAprobacion ? 'danger' : 'success'} />
+        <KPI t={t} label="Bloqueadas PENDIENTE" value={pruebasBloqueadas}
+          sub={pruebasBloqueadas > 0 ? 'sin registro · no modificables' : 'ninguna este turno'}
+          tone={pruebasBloqueadas > 0 ? 'danger' : 'success'} />
         <KPI t={t} label="Promedio cierre NC" value={tiempoPromedioCierre || '—'}
           sub={ncCerradas.length > 0 ? `${ncCerradas.length} NC cerradas hoy` : 'sin NC cerradas aún'}
           tone="success" />
