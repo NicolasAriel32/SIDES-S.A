@@ -1058,11 +1058,14 @@ const dataService = {
       .eq('id', ncUuid)
 
     console.log('updateNC supabase response:', { ncUuid, supabaseUpdates, error })
-    if (error) console.error('updateNC:', error)
+    if (error) {
+      console.error('updateNC:', error)
+      return null   // propaga el fallo al caller
+    }
 
     // Devolvemos el objeto actualizado para que el modal se refresque
     const ncs = await this.getNCHistory()
-    return ncs.find(nc => nc.supabase_id === ncUuid)
+    return ncs.find(nc => nc.supabase_id === ncUuid) ?? null
   }
 };
 
@@ -2704,6 +2707,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // CAMBIO v4: actualizar NC desde el modal
   const actualizarNC = async (ncId, updates) => {
     const updated = await dataService.updateNC(ncId, updates);
+    if (!updated) return false;   // señal de fallo al modal
     await dataService.logEvent({
       accion: updates.estado === 'CERRADA' ? 'CLOSE_NC' : 'UPDATE_NC',
       usuario: `${currentUser.nombre} ${currentUser.apellido}`,
@@ -2711,6 +2715,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
     });
     setGestionarNC(updated);
     reload();
+    return true;
   };
 
   return (
@@ -3817,6 +3822,7 @@ const GRAMOS_POR_CABEZAL = 18.4; // g
 
 const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // Campos para el cierre
   const [legajoCierre,         setLegajoCierre]         = useState(nc.legajoCierre         || currentUser.legajo);
@@ -3852,7 +3858,8 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
   const cerrarNC = async () => {
     if (!causaRaiz) return;
     setLoading(true);
-    await onUpdate(nc.supabase_id || nc.id, {
+    setErrorMsg('');
+    const ok = await onUpdate(nc.supabase_id || nc.id, {
       estado:               'CERRADA',
       causaRaiz,
       notasCierre:          notasCierre || null,
@@ -3861,6 +3868,9 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
       kgMerma:              kgMerma !== null ? Number(kgMerma) : null,
       cerradaAt:            new Date().toISOString(),
     });
+    if (!ok) {
+      setErrorMsg('No se pudo guardar el cierre. Verificá la conexión o ejecutá la migración SQL 04 en Supabase.');
+    }
     setLoading(false);
   };
 
@@ -4035,6 +4045,19 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
                 />
             }
           </div>
+
+          {/* Mensaje de error */}
+          {errorMsg && (
+            <div style={{
+              marginBottom: 12, padding: '10px 14px', borderRadius: 8,
+              background: '#ff4d4d18', border: '1px solid #ff4d4d60',
+              display: 'flex', alignItems: 'center', gap: 10,
+              fontFamily: 'Manrope', fontSize: 13, color: '#ff4d4d'
+            }}>
+              <AlertCircle size={15} />
+              {errorMsg}
+            </div>
+          )}
 
           {/* Botón cerrar NC */}
           {!esCerrada && (
