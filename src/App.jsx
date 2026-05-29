@@ -2621,6 +2621,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [alertaFalla, setAlertaFalla] = useState(null);
   // FIX v5: tab activa (turno actual / historial)
   const [tabActiva, setTabActiva] = useState('turno');
+  // Pareto: ventana de tiempo seleccionada + datos históricos
+  const [ventanaPareto, setVentanaPareto] = useState('turno');
+  const [testsHistorico, setTestsHistorico] = useState([]);
 
   const reload = async () => {
     setMachines(await dataService.getMachines());
@@ -2635,6 +2638,12 @@ const VistaSupervisor = ({ t, currentUser }) => {
     reload();
     const interval = setInterval(reload, 15000); // FIX v5: refresh cada 15s (era 30s)
     return () => clearInterval(interval);
+  }, []);
+
+  // Carga histórica para el Pareto semanal/mensual (una sola vez al montar)
+  useEffect(() => {
+    const hace30dias = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    dataService.getTests(hace30dias).then(setTestsHistorico);
   }, []);
 
   // FIX v5: suscripción Realtime — el supervisor se entera al instante
@@ -2697,9 +2706,21 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
   const enAprobacion = tests.find(t => t.esperandoAprobacion);
 
-  // Pareto del turno
+  // Pareto: filtra por ventana seleccionada
+  const testsFuentePareto = useMemo(() => {
+    if (ventanaPareto === 'turno') return tests;
+    const ahora = Date.now();
+    const limite = ventanaPareto === 'semana'
+      ? ahora - 7  * 24 * 60 * 60 * 1000
+      : ahora - 30 * 24 * 60 * 60 * 1000;
+    return testsHistorico.filter(t => {
+      const ts = new Date(t.timestampSenal || t.timestamp).getTime();
+      return ts >= limite;
+    });
+  }, [ventanaPareto, tests, testsHistorico]);
+
   const paretoMap = {};
-  tests.filter(t => t.tipos).forEach(t => t.tipos.forEach(tid => {
+  testsFuentePareto.filter(t => t.tipos?.length > 0).forEach(t => t.tipos.forEach(tid => {
     paretoMap[tid] = (paretoMap[tid] || 0) + 1;
   }));
   const paretoTurno = Object.entries(paretoMap)
@@ -3008,11 +3029,38 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </Card>
 
         <Card t={t} padding={20}>
-          <SectionHeader t={t} title="Pareto del turno" sub={`${totalIncidenciasTipos} ${totalIncidenciasTipos === 1 ? 'incidencia registrada' : 'incidencias registradas'}`} />
-          <div style={{ marginTop: 16 }}>
+          {/* Encabezado + selector de ventana */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+            <div>
+              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>Pareto de fallas</div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginTop: 2 }}>
+                {totalIncidenciasTipos} {totalIncidenciasTipos === 1 ? 'incidencia' : 'incidencias'} · {
+                  ventanaPareto === 'turno' ? 'turno actual' :
+                  ventanaPareto === 'semana' ? 'últimos 7 días' : 'últimos 30 días'
+                }
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[
+                { id: 'turno',  label: 'Turno' },
+                { id: 'semana', label: '7 días' },
+                { id: 'mes',    label: '30 días' },
+              ].map(v => (
+                <button key={v.id} onClick={() => setVentanaPareto(v.id)} style={{
+                  padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
+                  fontFamily: 'JetBrains Mono', fontSize: 11, fontWeight: 600,
+                  border: `1px solid ${ventanaPareto === v.id ? t.accent : t.border}`,
+                  background: ventanaPareto === v.id ? t.accent + '22' : t.surfaceHi,
+                  color: ventanaPareto === v.id ? t.accent : t.textMuted,
+                  transition: 'all 0.15s'
+                }}>{v.label}</button>
+              ))}
+            </div>
+          </div>
+          <div>
             {paretoTurno.length === 0 ? (
               <EmptyState icon={CheckCircle2} t={t}
-                title="Sin fallas en el turno"
+                title="Sin fallas en este período"
                 desc="Cuando se registren rechazos, el Pareto los irá ordenando por frecuencia." />
             ) : (
               paretoTurno.map((p, i) => (
