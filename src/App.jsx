@@ -179,6 +179,30 @@ const fechaLocalAR = (date) => {
   }).format(d)
 }
 
+// Helper: devuelve el Date UTC correspondiente al inicio del turno activo ahora.
+// Turno noche cruza la medianoche: 22:00 del día X → 06:00 del día X+1.
+const inicioTurnoActual = (now = new Date()) => {
+  const fechaAR = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(now);
+  const hora = parseInt(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit', hour12: false
+  }).format(now), 10);
+  if (hora >= 6 && hora < 14) return new Date(`${fechaAR}T06:00:00-03:00`);
+  if (hora >= 14 && hora < 22) return new Date(`${fechaAR}T14:00:00-03:00`);
+  if (hora >= 22) return new Date(`${fechaAR}T22:00:00-03:00`);
+  // 00:00–05:59: turno noche arrancó AYER a las 22:00
+  const ayerAR = new Date(`${fechaAR}T12:00:00-03:00`);
+  ayerAR.setDate(ayerAR.getDate() - 1);
+  const ayerStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(ayerAR);
+  return new Date(`${ayerStr}T22:00:00-03:00`);
+};
+
 // Helper: dado un timestamp UTC, devuelve el código del turno (M/T/N) según
 // la hora ARGENTINA en la que se generó. Reglas: M 06-14, T 14-22, N 22-06.
 const turnoDeFecha = (date) => {
@@ -470,14 +494,17 @@ const dataService = {
   // - estado        = 'OK' | 'RECHAZADO' (de p.resultado)
   // - esperandoAprobacion = (tuvo_falla=true && estado_final='PENDIENTE_APROBACION')
   // - aprobado      = (timestamp_aprobada IS NOT NULL)
-  async getTests() {
-    const { data, error } = await supabase
+  async getTests(desde = null) {
+    let query = supabase
       .from('pruebas')
       .select(`
         *,
         fallas:pruebas_fallas(tipo_falla_id)
       `)
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: false });
+    // Si se pasa un timestamp de inicio de turno, filtramos en BD (más eficiente)
+    if (desde) query = query.gte('created_at', desde.toISOString());
+    const { data, error } = await query;
 
     console.log('getTests supabase response:', { data, error })
     if (error) { console.error('getTests:', error); return []; }
@@ -1644,15 +1671,12 @@ const VistaOperario = ({ t, user, refresh }) => {
   // "Simular señal del PLC" (puente hasta que conectemos la I/O real). El init
   // solo deja al operario listo: máquina asignada + cuántas pruebas lleva el turno.
   const recalcularContador = async (maquinaId) => {
-    const allTests = await dataService.getTests();
-    // FIX v6: usa zona horaria Argentina para que el día no se reinicie a las 21h UTC
-    const hoy = fechaLocalAR(new Date());
-    const delTurno = allTests.filter(test =>
-      test.maquina === maquinaId &&
-      fechaLocalAR(test.timestampSenal || test.timestamp) === hoy
-    );
+    // FIX v7: filtramos desde el inicio del turno activo, no por fecha calendario.
+    // Así el turno noche (22:00→06:00) no se parte en dos al cruzar la medianoche.
+    const allTests = await dataService.getTests(inicioTurnoActual());
+    const delTurno = allTests.filter(test => test.maquina === maquinaId);
     setPruebasDelTurno(delTurno);
-    // numeroPrueba = cantidad de pruebas YA cerradas hoy (sin PENDIENTE auto) + 1
+    // numeroPrueba = cantidad de pruebas YA cerradas en el turno (sin PENDIENTE auto) + 1
     return delTurno.filter(test => test.estadoFinal !== 'PENDIENTE').length + 1;
   };
 
@@ -2544,7 +2568,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
   const reload = async () => {
     setMachines(await dataService.getMachines());
-    setTests(await dataService.getTests());
+    // FIX v7: solo trae pruebas del turno activo para que el turno noche
+    // no mezcle registros del día anterior al cruzar la medianoche.
+    setTests(await dataService.getTests(inicioTurnoActual()));
     setNcHistory(await dataService.getNCHistory());
     setUnreadObs(await dataService.getAllUnreadObservations());
   };
@@ -2595,8 +2621,22 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const machinesIntegradas = machines.filter(m => m.integrada);
   const idealAhora = 6;
   const machinesProgress = machinesIntegradas.map(m => {
-    const reales = tests.filter(t => t.maquina === m.id).length;
-    return { ...m, reales: Math.min(reales, 8), ideal: idealAhora, pct: Math.round((reales / idealAhora) * 100) };
+    const mTests = tests.filter(t => t.maquina === m.id);
+    const reales = mTests.length;
+    // Última prueba completada (no PENDIENTE) para detectar si la máquina está vencida
+    const completadas = mTests.filter(t => t.estadoFinal !== 'PENDIENTE' && t.estadoFinal !== 'PENDIENTE_APROBACION');
+    const ultimaPruebaTs = completadas.length > 0
+      ? completadas.reduce((latest, t) => {
+          const ts = new Date(t.timestampSenal || t.timestamp);
+          return ts > latest ? ts : latest;
+        }, new Date(0))
+      : null;
+    const minSinPrueba = ultimaPruebaTs
+      ? Math.floor((Date.now() - ultimaPruebaTs.getTime()) / 60000)
+      : null;
+    // Vencida: más de 60 min sin prueba completada (solo si ya hubo al menos una)
+    const vencida = minSinPrueba !== null && minSinPrueba >= 60;
+    return { ...m, reales: Math.min(reales, 8), ideal: idealAhora, pct: Math.round((reales / idealAhora) * 100), ultimaPruebaTs, minSinPrueba, vencida };
   });
 
   const enAprobacion = tests.find(t => t.esperandoAprobacion);
@@ -3062,7 +3102,12 @@ const MachineRowMejorada = ({ m, t }) => {
   return (
     <div style={{
       display: 'grid', gridTemplateColumns: '160px 1fr 90px 60px',
-      gap: 14, padding: '14px 0', borderBottom: `1px solid ${t.border}`, alignItems: 'center'
+      gap: 14, padding: '14px 0', borderBottom: `1px solid ${t.border}`, alignItems: 'center',
+      // Fondo suave naranja si la máquina está vencida
+      background: m.vencida ? '#ff980008' : 'transparent',
+      borderRadius: m.vencida ? 8 : 0,
+      paddingLeft: m.vencida ? 10 : 0,
+      paddingRight: m.vencida ? 10 : 0,
     }}>
       <div>
         <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: t.text, fontWeight: 600, letterSpacing: '0.02em' }}>
@@ -3071,6 +3116,20 @@ const MachineRowMejorada = ({ m, t }) => {
         <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 2 }}>
           {m.linea}
         </div>
+        {/* Indicador de prueba vencida */}
+        {m.vencida && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            marginTop: 4, padding: '2px 7px', borderRadius: 4,
+            background: '#ff980022', border: '1px solid #ff980066',
+            animation: 'neonPulse 1.5s ease-in-out infinite'
+          }}>
+            <Clock size={10} color="#ff9800" />
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: '#ff9800', fontWeight: 600 }}>
+              {m.minSinPrueba}m sin prueba
+            </span>
+          </div>
+        )}
       </div>
       <div style={{ height: 12, background: t.surfaceHi, borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
         <div style={{ width: `${Math.min(m.pct, 100)}%`, height: '100%', background: colors[tone], borderRadius: 6, transition: 'width 0.3s' }} />
@@ -3084,9 +3143,13 @@ const MachineRowMejorada = ({ m, t }) => {
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <div style={{
           width: 32, height: 32, borderRadius: 6,
-          background: colors[tone] + '20', display: 'flex', alignItems: 'center', justifyContent: 'center'
+          background: m.vencida ? '#ff980020' : colors[tone] + '20',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
-          <StatusIcon size={16} color={colors[tone]} />
+          {m.vencida
+            ? <Clock size={16} color="#ff9800" style={{ animation: 'neonPulse 1.5s ease-in-out infinite' }} />
+            : <StatusIcon size={16} color={colors[tone]} />
+          }
         </div>
       </div>
     </div>
