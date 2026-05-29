@@ -429,6 +429,27 @@ const dataService = {
     return await this.getMachines()
   },
 
+  // Asigna un operario a una máquina (actualiza maquina_asignada en usuarios).
+  // Pasar maquinaId = null para desasignar.
+  async asignarOperario(legajo, maquinaId) {
+    const { error } = await supabase
+      .from('usuarios')
+      .update({ maquina_asignada: maquinaId })
+      .eq('legajo', legajo);
+    if (error) { console.error('asignarOperario:', error); return false; }
+    return true;
+  },
+
+  // Desasigna cualquier operario que tenga asignada esa máquina (limpia asignaciones previas).
+  async desasignarMaquina(maquinaId) {
+    const { error } = await supabase
+      .from('usuarios')
+      .update({ maquina_asignada: null })
+      .eq('maquina_asignada', maquinaId);
+    if (error) { console.error('desasignarMaquina:', error); return false; }
+    return true;
+  },
+
   // ===== CACHE DE USUARIOS (legajo → nombre completo) =====
   // El schema de pruebas/observaciones/no_conformidades guarda solo legajos.
   // Para mostrar nombres en la UI, cacheamos usuarios una vez por sesión.
@@ -3541,10 +3562,11 @@ const VistaAdmin = ({ t, currentUser }) => {
   const [tab, setTab] = useState('dashboard');
 
   const tabs = [
-    { id: 'dashboard', label: 'Dashboard', icon: Activity },
-    { id: 'historial', label: 'Historial', icon: History }, // FIX v5
-    { id: 'usuarios', label: 'Usuarios', icon: Users },
-    { id: 'maquinas', label: 'Máquinas', icon: Cpu },
+    { id: 'dashboard',    label: 'Dashboard',    icon: Activity },
+    { id: 'asignaciones', label: 'Asignaciones',  icon: Users },
+    { id: 'historial',    label: 'Historial',     icon: History },
+    { id: 'usuarios',     label: 'Usuarios',      icon: User },
+    { id: 'maquinas',     label: 'Máquinas',      icon: Cpu },
   ];
 
   return (
@@ -3572,10 +3594,249 @@ const VistaAdmin = ({ t, currentUser }) => {
         ))}
       </div>
 
-      {tab === 'dashboard' && <AdminDashboard t={t} />}
-      {tab === 'historial' && <HistorialPorTurno t={t} />}
-      {tab === 'usuarios' && <AdminUsuarios t={t} currentUser={currentUser} />}
-      {tab === 'maquinas' && <AdminMaquinas t={t} />}
+      {tab === 'dashboard'    && <AdminDashboard t={t} />}
+      {tab === 'asignaciones' && <AdminAsignaciones t={t} currentUser={currentUser} />}
+      {tab === 'historial'    && <HistorialPorTurno t={t} />}
+      {tab === 'usuarios'     && <AdminUsuarios t={t} currentUser={currentUser} />}
+      {tab === 'maquinas'     && <AdminMaquinas t={t} />}
+    </div>
+  );
+};
+
+// =================================================================
+// ADMIN: ASIGNACIONES DE OPERARIOS POR TURNO
+// =================================================================
+
+const AdminAsignaciones = ({ t, currentUser }) => {
+  const [machines,  setMachines]  = useState([]);
+  const [operarios, setOperarios] = useState([]);
+  const [saving,    setSaving]    = useState(null); // maquinaId que está guardando
+  const [editando,  setEditando]  = useState(null); // maquinaId cuyo selector está abierto
+  const [selects,   setSelects]   = useState({});   // { maquinaId: legajo_seleccionado }
+
+  const load = async () => {
+    const [macs, users] = await Promise.all([
+      dataService.getMachines(),
+      dataService.getUsers(),
+    ]);
+    setMachines(macs);
+    setOperarios(users.filter(u => u.rol === 'operario' && u.activo !== false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  // Devuelve el operario actualmente asignado a una máquina (puede ser undefined)
+  const operarioDeMAQ = (maquinaId) =>
+    operarios.find(u => u.maquinaAsignada === maquinaId);
+
+  const guardar = async (maquinaId) => {
+    const legajoNuevo = selects[maquinaId];   // undefined = desasignar
+    setSaving(maquinaId);
+
+    // 1. Quitar asignación anterior de quien tenía esta máquina
+    await dataService.desasignarMaquina(maquinaId);
+
+    // 2. Si eligieron un operario, asignarlo
+    if (legajoNuevo) {
+      // Liberar la máquina que ese operario tenía antes (si tenía otra)
+      const opActual = operarios.find(u => u.legajo === legajoNuevo);
+      if (opActual?.maquinaAsignada && opActual.maquinaAsignada !== maquinaId) {
+        await dataService.asignarOperario(legajoNuevo, null);
+      }
+      await dataService.asignarOperario(legajoNuevo, maquinaId);
+    }
+
+    await dataService.logEvent({
+      accion: 'UPDATE',
+      usuario: `${currentUser.nombre} ${currentUser.apellido}`,
+      desc: legajoNuevo
+        ? `Asignó operario legajo ${legajoNuevo} a ${maquinaId}`
+        : `Desasignó operario de ${maquinaId}`,
+    });
+
+    setSaving(null);
+    setEditando(null);
+    setSelects(s => { const c = {...s}; delete c[maquinaId]; return c; });
+    await load();
+  };
+
+  // Estilos base
+  const cardBase = (tint) => ({
+    background: t.surface,
+    border: `1px solid ${tint || t.border}`,
+    borderRadius: 10,
+    padding: '14px 16px',
+  });
+
+  // Tarjeta de una sola máquina
+  const MaquinaCard = ({ m }) => {
+    const op        = operarioDeMAQ(m.id);
+    const isEditing = editando === m.id;
+    const isSaving  = saving  === m.id;
+    const selVal    = selects[m.id] ?? (op?.legajo || '');
+
+    return (
+      <div style={cardBase(op ? `${t.success}44` : undefined)}>
+        {/* Encabezado */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, fontWeight: 700, color: t.text }}>
+              {m.nombre || m.id}
+            </div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>
+              {m.id}
+            </div>
+          </div>
+          <Pill variant={m.integrada ? 'success' : 'default'} t={t} mono>
+            {m.integrada ? 'ACTIVA' : 'INACTIVA'}
+          </Pill>
+        </div>
+
+        {/* Operario actual */}
+        {op ? (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: `${t.success}18`, border: `1px solid ${t.success}33`,
+            borderRadius: 6, padding: '7px 10px', marginBottom: 10
+          }}>
+            <User size={13} color={t.success} />
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text }}>
+                {op.nombre} {op.apellido}
+              </div>
+              <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textMuted }}>
+                Legajo {op.legajo}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: t.surfaceHi, borderRadius: 6,
+            padding: '7px 10px', marginBottom: 10
+          }}>
+            <User size={13} color={t.textDim} />
+            <span style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textDim }}>Sin operario asignado</span>
+          </div>
+        )}
+
+        {/* Selector */}
+        {isEditing ? (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select
+              value={selVal}
+              onChange={e => setSelects(s => ({ ...s, [m.id]: e.target.value }))}
+              style={{
+                flex: 1, background: t.surfaceHi, color: t.text,
+                border: `1px solid ${t.border}`, borderRadius: 6,
+                padding: '7px 10px', fontFamily: 'Manrope', fontSize: 12, cursor: 'pointer'
+              }}
+            >
+              <option value="">— Sin asignar —</option>
+              {operarios.map(u => (
+                <option key={u.legajo} value={u.legajo}>
+                  {u.nombre} {u.apellido} (L{u.legajo})
+                  {u.maquinaAsignada && u.maquinaAsignada !== m.id ? ` · ${u.maquinaAsignada}` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => guardar(m.id)}
+              disabled={isSaving}
+              style={{
+                background: t.accent, color: '#fff',
+                border: 'none', borderRadius: 6,
+                padding: '7px 12px', cursor: 'pointer',
+                fontFamily: 'Manrope', fontSize: 12, fontWeight: 600
+              }}
+            >
+              {isSaving ? '…' : 'OK'}
+            </button>
+            <button
+              onClick={() => { setEditando(null); setSelects(s => { const c = {...s}; delete c[m.id]; return c; }); }}
+              style={{
+                background: t.surfaceHi, color: t.textMuted,
+                border: `1px solid ${t.border}`, borderRadius: 6,
+                padding: '7px 10px', cursor: 'pointer', fontFamily: 'Manrope', fontSize: 12
+              }}
+            >✕</button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setEditando(m.id)}
+            style={{
+              width: '100%', background: t.surfaceHi, color: t.textMuted,
+              border: `1px solid ${t.border}`, borderRadius: 6,
+              padding: '7px 0', cursor: 'pointer',
+              fontFamily: 'Manrope', fontSize: 12, fontWeight: 500,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+            }}
+          >
+            <Edit2 size={12} /> {op ? 'Cambiar operario' : 'Asignar operario'}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // Separar máquinas con línea vs sin línea
+  const lineas = ['Línea 1', 'Línea 2', 'Línea 3'];
+  const maqPorLinea = lineas.map(l => ({
+    linea: l,
+    maquinas: machines.filter(m => m.linea === l),
+  })).filter(g => g.maquinas.length > 0);
+  const maqSinLinea = machines.filter(m => !m.linea);
+
+  return (
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <SectionHeader
+          t={t}
+          title="Asignación de operarios"
+          sub={`Turno ${TURNO_LABELS[turnoDeFecha(new Date())] || '—'} · ${operarios.length} operarios disponibles`}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 24, alignItems: 'start' }}>
+
+        {/* ── Columna izquierda: máquinas individuales ── */}
+        <div>
+          <div style={{
+            fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim,
+            letterSpacing: '0.1em', marginBottom: 12, textTransform: 'uppercase'
+          }}>
+            Máquinas individuales
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {maqSinLinea.length === 0
+              ? <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.textDim }}>Sin máquinas individuales</div>
+              : maqSinLinea.map(m => <MaquinaCard key={m.id} m={m} />)
+            }
+          </div>
+        </div>
+
+        {/* ── Columna derecha: líneas de producción ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {maqPorLinea.map(({ linea, maquinas }) => (
+            <div key={linea}>
+              <div style={{
+                fontFamily: 'JetBrains Mono', fontSize: 10, color: t.accent,
+                letterSpacing: '0.1em', marginBottom: 10, textTransform: 'uppercase',
+                display: 'flex', alignItems: 'center', gap: 8
+              }}>
+                <Layers size={12} color={t.accent} /> {linea}
+              </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${Math.min(maquinas.length, 2)}, 1fr)`,
+                gap: 10
+              }}>
+                {maquinas.map(m => <MaquinaCard key={m.id} m={m} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
