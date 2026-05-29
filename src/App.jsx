@@ -4534,6 +4534,329 @@ const ModalShell = ({ children, title, onClose, t }) => (
 );
 
 // =================================================================
+// PANTALLA DE PASILLO — kiosk sin login, auto-refresh 30s
+// Acceso: https://app.vercel.app?pasillo
+// =================================================================
+
+const TURNO_LABELS = { M: 'Mañana', T: 'Tarde', N: 'Noche' };
+
+// Construye el label corto de un turno para el gráfico de tendencia
+const labelTurno = (inicioShift, esActual) => {
+  const k = turnoDeFecha(inicioShift) || '?';
+  if (esActual) return `${k}/ahora`;
+  const hoySt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+  const shiftSt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(inicioShift);
+  const diffMs  = new Date(hoySt).getTime() - new Date(shiftSt).getTime();
+  const diffD   = Math.round(diffMs / 86400000);
+  if (diffD === 0) return `${k}/hoy`;
+  if (diffD === 1 && k === 'N') return `${k}/anoche`;
+  if (diffD === 1) return `${k}/ayer`;
+  return `${k}/hace ${diffD}d`;
+};
+
+const PantallaPasillo = ({ t }) => {
+  const [datos, setDatos] = useState(null);
+  const [horaActual, setHoraActual] = useState('');
+  const [ultimoRefresh, setUltimoRefresh] = useState('');
+
+  const BG       = '#080e1c';
+  const CARD_BG  = '#0d1526';
+  const CARD_BD  = '#1e2d4a';
+  const LABEL_C  = '#4a6080';
+  const TEXT_C   = '#cdd9ea';
+
+  const tasaColor = (tasa) => {
+    const v = parseFloat(tasa);
+    if (v === 0)  return '#4caf50';
+    if (v <= 3)   return '#8bc34a';
+    if (v <= 7)   return '#ff9800';
+    return '#ff4d4d';
+  };
+
+  const cargarDatos = async () => {
+    const inicioActual   = inicioTurnoActual();
+    const inicioAnterior = new Date(inicioActual.getTime() - 8 * 60 * 60 * 1000);
+    const hace7d         = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const hace48h        = new Date(inicioActual.getTime() - 5 * 8 * 60 * 60 * 1000); // 6 turnos atrás
+
+    const [testsActual, testsAnterior, tests7d, ncHistory, machines] = await Promise.all([
+      dataService.getTests(inicioActual),
+      dataService.getTests(inicioAnterior).then(all =>
+        all.filter(tt => new Date(tt.timestampSenal || tt.timestamp) < inicioActual)
+      ),
+      dataService.getTests(hace7d),
+      dataService.getNCHistory(),
+      dataService.getMachines(),
+    ]);
+
+    // KPIs turno actual
+    const totalActual     = testsActual.length;
+    const rechazActual    = testsActual.filter(tt => tt.estado === 'RECHAZADO').length;
+    const tasaActual      = totalActual > 0 ? (rechazActual / totalActual * 100).toFixed(1) : '0.0';
+    const pendientes      = testsActual.filter(tt => tt.estadoFinal === 'PENDIENTE').length;
+    const ncAbiertas      = ncHistory.filter(nc => nc.estado === 'ABIERTA' || nc.estado === 'EN ANALISIS').length;
+    const maquinasActivas = machines.filter(m => m.integrada).length;
+    const maquinasTotal   = machines.length;
+    const idealTurno      = maquinasActivas * 8;
+
+    // Tasa turno anterior (comparación)
+    const totalAnterior  = testsAnterior.length;
+    const rechazAnterior = testsAnterior.filter(tt => tt.estado === 'RECHAZADO').length;
+    const tasaAnterior   = totalAnterior > 0 ? (rechazAnterior / totalAnterior * 100).toFixed(1) : null;
+
+    // Promedio cierre NC (histórico)
+    const ncCerradas = ncHistory.filter(nc => nc.estado === 'CERRADA' && nc.cerradaAt && nc.timestamp);
+    const promCierreMin = ncCerradas.length > 0
+      ? Math.round(ncCerradas.reduce((s, nc) =>
+          s + (new Date(nc.cerradaAt) - new Date(nc.timestamp)), 0
+        ) / ncCerradas.length / 60000)
+      : null;
+
+    // Pareto TOP 3 — últimos 7 días
+    const paretoMap = {};
+    tests7d.filter(tt => tt.tipos?.length).forEach(tt =>
+      tt.tipos.forEach(tid => { paretoMap[tid] = (paretoMap[tid] || 0) + 1; })
+    );
+    const paretoTop = Object.entries(paretoMap)
+      .map(([id, n]) => ({ nombre: TIPOS_FALLA.find(tf => tf.id === id)?.nombre || id, cantidad: n }))
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 3);
+
+    // Gráfico tendencia — últimos 6 turnos
+    const grafico = [];
+    for (let i = 5; i >= 0; i--) {
+      const ini = new Date(inicioActual.getTime() - i * 8 * 60 * 60 * 1000);
+      const fin = new Date(ini.getTime() + 8 * 60 * 60 * 1000);
+      const pool = i === 0 ? testsActual : tests7d.filter(tt => {
+        const ts = new Date(tt.timestampSenal || tt.timestamp);
+        return ts >= ini && ts < fin;
+      });
+      const tot  = pool.length;
+      const rej  = pool.filter(tt => tt.estado === 'RECHAZADO').length;
+      const tasa = tot > 0 ? parseFloat((rej / tot * 100).toFixed(1)) : 0;
+      grafico.push({ label: labelTurno(ini, i === 0), tasa, total: tot });
+    }
+
+    const turnoActual = turnoDeFecha(new Date());
+    setDatos({ totalActual, rechazActual, tasaActual, tasaAnterior, pendientes, ncAbiertas,
+               maquinasActivas, maquinasTotal, idealTurno, promCierreMin, paretoTop, grafico, turnoActual });
+    setUltimoRefresh(new Date().toLocaleTimeString('es-AR', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      timeZone: 'America/Argentina/Buenos_Aires'
+    }));
+  };
+
+  useEffect(() => {
+    cargarDatos();
+    const iv = setInterval(cargarDatos, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setHoraActual(new Date().toLocaleTimeString('es-AR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires'
+    }));
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!datos) return (
+    <div style={{ minHeight: '100vh', background: BG, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ fontFamily: 'JetBrains Mono', color: LABEL_C, fontSize: 14 }}>Cargando…</div>
+    </div>
+  );
+
+  const deltaTasa = datos.tasaAnterior !== null
+    ? (parseFloat(datos.tasaActual) - parseFloat(datos.tasaAnterior)).toFixed(1)
+    : null;
+  const tcActual = tasaColor(datos.tasaActual);
+
+  const card = (extraBorderColor) => ({
+    background: CARD_BG,
+    border: `1px solid ${extraBorderColor || CARD_BD}`,
+    borderRadius: 14,
+    padding: '24px 28px',
+  });
+
+  const labelStyle = {
+    fontFamily: 'JetBrains Mono', fontSize: 11, color: LABEL_C,
+    letterSpacing: '0.1em', marginBottom: 10, textTransform: 'uppercase',
+  };
+  const bigNum = (color) => ({
+    fontFamily: 'Bricolage Grotesque', fontSize: 64, fontWeight: 700,
+    color: color || TEXT_C, lineHeight: 1,
+  });
+
+  return (
+    <div style={{ minHeight: '100vh', background: BG, color: TEXT_C, fontFamily: 'Manrope, sans-serif', padding: '28px 40px', boxSizing: 'border-box' }}>
+      <style>{FONT_IMPORT}</style>
+
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+        <div>
+          <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 26, fontWeight: 700, color: TEXT_C, letterSpacing: '-0.02em' }}>
+            SIDES S.A. · Control de Calidad
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: LABEL_C, marginTop: 4, letterSpacing: '0.08em' }}>
+            TURNO {TURNO_LABELS[datos.turnoActual]?.toUpperCase() || '—'} EN CURSO
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 48, fontWeight: 700, color: TEXT_C, lineHeight: 1 }}>
+            {horaActual}
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: LABEL_C, marginTop: 4 }}>
+            ↺ {ultimoRefresh}
+          </div>
+        </div>
+      </div>
+
+      {/* ── KPIs fila 1 ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
+
+        {/* Tasa de falla */}
+        <div style={card(`${tcActual}55`)}>
+          <div style={labelStyle}>Tasa de Falla · Turno</div>
+          <div style={bigNum(tcActual)}>{datos.tasaActual}%</div>
+          {deltaTasa !== null && (
+            <div style={{ marginTop: 10, fontFamily: 'JetBrains Mono', fontSize: 13,
+              color: parseFloat(deltaTasa) > 0 ? '#ff4d4d' : parseFloat(deltaTasa) < 0 ? '#4caf50' : LABEL_C }}>
+              {parseFloat(deltaTasa) > 0 ? '▲' : parseFloat(deltaTasa) < 0 ? '▼' : '='} {Math.abs(deltaTasa)}% vs anterior
+            </div>
+          )}
+          <div style={{ fontFamily: 'Manrope', fontSize: 12, color: LABEL_C, marginTop: 6 }}>
+            {datos.rechazActual} rechazo{datos.rechazActual !== 1 ? 's' : ''} / {datos.totalActual} pruebas
+          </div>
+        </div>
+
+        {/* Pruebas del turno */}
+        <div style={card()}>
+          <div style={labelStyle}>Pruebas del Turno</div>
+          <div style={bigNum()}>{datos.totalActual}</div>
+          <div style={{ margin: '12px 0 5px', height: 6, background: '#0a1020', borderRadius: 3 }}>
+            <div style={{
+              height: '100%', borderRadius: 3,
+              width: `${Math.min((datos.totalActual / Math.max(datos.idealTurno, 1)) * 100, 100)}%`,
+              background: datos.totalActual >= datos.idealTurno ? '#4caf50' : '#ff9800',
+              transition: 'width 0.5s ease'
+            }} />
+          </div>
+          <div style={{ fontFamily: 'Manrope', fontSize: 12, color: LABEL_C }}>
+            de {datos.idealTurno} previstas · {datos.maquinasActivas} máq. activas
+          </div>
+        </div>
+
+        {/* NC abiertas */}
+        <div style={card(datos.ncAbiertas > 0 ? '#ff4d4d55' : undefined)}>
+          <div style={labelStyle}>NC Abiertas</div>
+          <div style={bigNum(datos.ncAbiertas > 0 ? '#ff4d4d' : '#4caf50')}>{datos.ncAbiertas}</div>
+          {datos.promCierreMin !== null ? (
+            <div style={{ fontFamily: 'Manrope', fontSize: 20, fontWeight: 600, color: LABEL_C, marginTop: 10 }}>
+              Prom. cierre:{' '}
+              <span style={{ color: TEXT_C }}>
+                {datos.promCierreMin < 60
+                  ? `${datos.promCierreMin} min`
+                  : `${Math.floor(datos.promCierreMin / 60)}h ${datos.promCierreMin % 60}m`}
+              </span>
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'Manrope', fontSize: 13, color: LABEL_C, marginTop: 10 }}>
+              {datos.ncAbiertas === 0 ? 'Sin NC pendientes' : 'Sin cierres registrados aún'}
+            </div>
+          )}
+        </div>
+
+        {/* Pendientes */}
+        <div style={card(datos.pendientes > 0 ? '#ff980055' : undefined)}>
+          <div style={labelStyle}>Pendientes</div>
+          <div style={bigNum(datos.pendientes > 0 ? '#ff9800' : '#4caf50')}>{datos.pendientes}</div>
+          <div style={{ fontFamily: 'Manrope', fontSize: 13, color: LABEL_C, marginTop: 10 }}>
+            {datos.pendientes === 0 ? 'Sin registros incompletos' : 'pruebas sin completar a tiempo'}
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: LABEL_C, marginTop: 4 }}>
+            {datos.maquinasActivas} / {datos.maquinasTotal} máquinas integradas
+          </div>
+        </div>
+      </div>
+
+      {/* ── Fila inferior: Pareto 7d + Tendencia 6 turnos ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+        {/* TOP FALLAS últimos 7 días */}
+        <div style={card()}>
+          <div style={labelStyle}>TOP FALLAS · ÚLTIMOS 7 DÍAS</div>
+          {datos.paretoTop.length === 0 ? (
+            <div style={{ fontFamily: 'Manrope', fontSize: 14, color: LABEL_C, paddingTop: 8 }}>
+              Sin fallas registradas en los últimos 7 días
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {datos.paretoTop.map((p, i) => {
+                const maxN   = datos.paretoTop[0].cantidad;
+                const pct    = Math.round((p.cantidad / maxN) * 100);
+                const colors = ['#ff4d4d', '#ff9800', '#ffcc02'];
+                return (
+                  <div key={p.nombre}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontFamily: 'Manrope', fontSize: 15, fontWeight: 600, color: TEXT_C }}>
+                        {i + 1}. {p.nombre}
+                      </span>
+                      <span style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: colors[i] }}>
+                        {p.cantidad}
+                      </span>
+                    </div>
+                    <div style={{ height: 8, background: '#0a1020', borderRadius: 4 }}>
+                      <div style={{ height: '100%', borderRadius: 4, width: `${pct}%`, background: colors[i], transition: 'width 0.5s' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Tendencia — últimos 6 turnos */}
+        <div style={card()}>
+          <div style={labelStyle}>TASA DE FALLA · ÚLTIMOS 6 TURNOS</div>
+          <ResponsiveContainer width="100%" height={140}>
+            <LineChart data={datos.grafico} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e2d4a" />
+              <XAxis
+                dataKey="label"
+                tick={{ fontFamily: 'JetBrains Mono', fontSize: 10, fill: LABEL_C }}
+                axisLine={false} tickLine={false}
+              />
+              <YAxis
+                tick={{ fontFamily: 'JetBrains Mono', fontSize: 10, fill: LABEL_C }}
+                axisLine={false} tickLine={false}
+                tickFormatter={v => `${v}%`}
+              />
+              <Tooltip
+                contentStyle={{ background: '#0d1526', border: `1px solid ${CARD_BD}`, borderRadius: 8,
+                  fontFamily: 'Manrope', fontSize: 12, color: TEXT_C }}
+                formatter={(v) => [`${v}%`, 'Tasa falla']}
+              />
+              <Line
+                type="monotone" dataKey="tasa" stroke="#4a9eff"
+                strokeWidth={2} dot={{ fill: '#4a9eff', r: 4 }}
+                activeDot={{ r: 6, fill: '#7bc4ff' }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// =================================================================
 // APP PRINCIPAL
 // =================================================================
 
@@ -4541,12 +4864,15 @@ export default function App() {
   const [theme, setTheme] = useState('dark');
   const t = tokens[theme];
 
+  // Modo pasillo: URL contiene ?pasillo → pantalla kiosk sin login
+  const esModoPasillo = typeof window !== 'undefined' && window.location.search.includes('pasillo');
+
   const [user, setUser] = useState(null);
   const [hora, setHora] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    dataService.getCurrentUser().then(u => setUser(u));
+    if (!esModoPasillo) dataService.getCurrentUser().then(u => setUser(u));
   }, []);
 
   useEffect(() => {
@@ -4564,6 +4890,10 @@ export default function App() {
     await dataService.logout();
     setUser(null);
   };
+
+  if (esModoPasillo) {
+    return <PantallaPasillo t={tokens.dark} />;
+  }
 
   if (!user) {
     return <PantallaLogin onLogin={setUser} t={t} />;
