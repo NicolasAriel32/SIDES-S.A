@@ -82,6 +82,16 @@ const parsearCodigoProducto = (codigo) => {
   };
 };
 
+// Helper: devuelve la línea de producción de una máquina según su número.
+// Línea 1: 10, 11 — Línea 2: 9, 12 — Línea 3: 7, 13 — resto: sin línea.
+const lineaDeMaquina = (maquinaId) => {
+  const num = parseInt(String(maquinaId).replace(/\D/g, ''), 10);
+  if ([10, 11].includes(num)) return 'Línea 1';
+  if ([9,  12].includes(num)) return 'Línea 2';
+  if ([7,  13].includes(num)) return 'Línea 3';
+  return null;
+};
+
 const RESPUESTAS_RAPIDAS = [
   { id: 'rev', icon: Eye, texto: 'REVISAR UNA CAJA AL 100%' },
   { id: 'mec', icon: Wrench, texto: 'AVISAR A MECÁNICO DE SALA' },
@@ -383,7 +393,7 @@ const dataService = {
     return (data || []).map(m => ({
       id: m.id,
       nombre: m.nombre,
-      linea: m.linea,
+      linea: lineaDeMaquina(m.id) ?? m.linea ?? null,
       activa: m.activa,
       integrada: m.integrada
     }))
@@ -1657,6 +1667,157 @@ const MenuItem = ({ children, icon: Icon, onClick, t, danger }) => (
 );
 
 // =================================================================
+// =================================================================
+// MODAL HISTORIAL SEMANAL — OPERARIO
+// =================================================================
+
+const ModalHistorialOperario = ({ maquinaId, operarioLegajo, t, onClose }) => {
+  const [tests, setTests] = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const hace7dias = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const todos = await dataService.getTests(hace7dias);
+      // Solo pruebas de esta máquina y este operario
+      setTests(todos.filter(t => t.maquina === maquinaId && t.legajoOperario === operarioLegajo));
+      setCargando(false);
+    })();
+  }, [maquinaId, operarioLegajo]);
+
+  // Agrupar por fecha AR
+  const porDia = useMemo(() => {
+    const mapa = {};
+    tests.forEach(test => {
+      const dia = fechaLocalAR(test.timestampSenal || test.timestamp);
+      if (!mapa[dia]) mapa[dia] = [];
+      mapa[dia].push(test);
+    });
+    // Ordenar días descendente
+    return Object.entries(mapa).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [tests]);
+
+  const iconoEstado = (test) => {
+    if (test.estadoFinal === 'PENDIENTE') return { icon: Clock,        color: '#ff9800', label: 'BLOQUEADA' };
+    if (test.estado === 'RECHAZADO')      return { icon: AlertTriangle, color: '#ff4d4d', label: 'RECHAZADA' };
+    return                                       { icon: CheckCircle2,  color: '#4caf50', label: 'OK'        };
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+      backdropFilter: 'blur(4px)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: t.surface, border: `1px solid ${t.border}`,
+        borderRadius: 12, width: '100%', maxWidth: 640, maxHeight: '85vh',
+        overflow: 'auto'
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '18px 24px', borderBottom: `1px solid ${t.border}`,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          position: 'sticky', top: 0, background: t.surface, zIndex: 1
+        }}>
+          <div>
+            <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 17, fontWeight: 600, color: t.text }}>
+              Mi historial · últimos 7 días
+            </div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>
+              {maquinaId} · {tests.length} pruebas registradas
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            background: t.surfaceHi, border: `1px solid ${t.border}`, color: t.textMuted,
+            padding: 6, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center'
+          }}><X size={14} /></button>
+        </div>
+
+        <div style={{ padding: 24 }}>
+          {cargando ? (
+            <div style={{ textAlign: 'center', padding: 40, fontFamily: 'Manrope', color: t.textMuted }}>
+              Cargando historial…
+            </div>
+          ) : tests.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40 }}>
+              <CheckCircle2 size={40} color={t.textMuted} style={{ marginBottom: 12 }} />
+              <div style={{ fontFamily: 'Manrope', color: t.textMuted }}>Sin registros en los últimos 7 días</div>
+            </div>
+          ) : (
+            porDia.map(([dia, pruebas]) => {
+              const ok        = pruebas.filter(p => p.estado !== 'RECHAZADO' && p.estadoFinal !== 'PENDIENTE').length;
+              const rechazadas = pruebas.filter(p => p.estado === 'RECHAZADO').length;
+              const bloqueadas = pruebas.filter(p => p.estadoFinal === 'PENDIENTE').length;
+              // Formatear fecha legible
+              const fechaLabel = new Date(`${dia}T12:00:00-03:00`).toLocaleDateString('es-AR', {
+                weekday: 'long', day: '2-digit', month: 'long',
+                timeZone: 'America/Argentina/Buenos_Aires'
+              });
+
+              return (
+                <div key={dia} style={{ marginBottom: 24 }}>
+                  {/* Cabecera del día */}
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${t.border}`
+                  }}>
+                    <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600, color: t.text, textTransform: 'capitalize' }}>
+                      {fechaLabel}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {ok > 0        && <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: '#4caf50', background: '#4caf5018', border: '1px solid #4caf5040', padding: '2px 8px', borderRadius: 4 }}>{ok} OK</span>}
+                      {rechazadas > 0 && <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: '#ff4d4d', background: '#ff4d4d18', border: '1px solid #ff4d4d40', padding: '2px 8px', borderRadius: 4 }}>{rechazadas} REC</span>}
+                      {bloqueadas > 0 && <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: '#ff9800', background: '#ff980018', border: '1px solid #ff980040', padding: '2px 8px', borderRadius: 4 }}>{bloqueadas} BLOQ</span>}
+                    </div>
+                  </div>
+
+                  {/* Lista de pruebas del día */}
+                  {pruebas
+                    .sort((a, b) => new Date(b.timestampSenal || b.timestamp) - new Date(a.timestampSenal || a.timestamp))
+                    .map(test => {
+                      const { icon: Icon, color, label } = iconoEstado(test);
+                      const hora = new Date(test.timestampSenal || test.timestamp)
+                        .toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+                      return (
+                        <div key={test.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 12,
+                          padding: '8px 0', borderBottom: `1px solid ${t.border}20`
+                        }}>
+                          <div style={{
+                            width: 28, height: 28, borderRadius: 6, flexShrink: 0,
+                            background: color + '18', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                          }}>
+                            <Icon size={14} color={color} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: t.text }}>
+                              {test.id}
+                              {test.lote && <span style={{ color: t.accent, marginLeft: 8 }}>lote {test.lote}</span>}
+                            </div>
+                            <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 2 }}>
+                              {hora} · caja {test.caja || '—'}
+                              {test.codigoProducto && <span style={{ marginLeft: 6, color: t.textDim }}>{test.codigoProducto}</span>}
+                            </div>
+                          </div>
+                          <span style={{
+                            fontFamily: 'JetBrains Mono', fontSize: 10, fontWeight: 700,
+                            color, padding: '2px 7px', borderRadius: 4,
+                            background: color + '18', border: `1px solid ${color}40`
+                          }}>{label}</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // VISTA OPERARIO — CON MENSAJES DEL SUPERVISOR (CAMBIO v4)
 // =================================================================
 
@@ -1671,6 +1832,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [lote, setLote] = useState('');
   const [loteAutocompletado, setLoteAutocompletado] = useState(false);
   const [obs, setObs] = useState('');
+  const [showHistorial, setShowHistorial] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [maquinaInfo, setMaquinaInfo] = useState(null);
@@ -1988,7 +2150,7 @@ const VistaOperario = ({ t, user, refresh }) => {
           <div>
             <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>MÁQUINA</div>
             <div style={{ fontFamily: 'JetBrains Mono', color: t.text, fontSize: 14, fontWeight: 500 }}>
-              {maquinaInfo?.id || '—'} · {maquinaInfo?.linea || '—'}
+              {maquinaInfo?.id || '—'}{maquinaInfo?.linea ? ` · ${maquinaInfo.linea}` : ''}
             </div>
           </div>
           <div style={{ width: 1, height: 32, background: t.border }} />
@@ -2006,8 +2168,27 @@ const VistaOperario = ({ t, user, refresh }) => {
               {pruebasDelTurno.filter(t => t.estado !== 'PENDIENTE').length} de {PRUEBAS_POR_TURNO}
             </div>
           </div>
+          <button onClick={() => setShowHistorial(true)} style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
+            background: t.surfaceHi, border: `1px solid ${t.border}`, borderRadius: 6,
+            color: t.textMuted, fontFamily: 'Manrope', fontSize: 12, fontWeight: 600,
+            cursor: 'pointer'
+          }}>
+            <History size={14} />
+            Mi historial
+          </button>
         </div>
       </div>
+
+      {/* Modal historial semanal */}
+      {showHistorial && (
+        <ModalHistorialOperario
+          maquinaId={maquinaInfo?.id}
+          operarioLegajo={user.legajo}
+          t={t}
+          onClose={() => setShowHistorial(false)}
+        />
+      )}
 
       {showSuccess ? (
         <Card t={t} padding={48} style={{ textAlign: 'center' }}>
@@ -3275,7 +3456,7 @@ const MachineRowMejorada = ({ m, t }) => {
           {m.id}
         </div>
         <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 2 }}>
-          {m.linea}
+          {m.linea || ''}
         </div>
         {/* Indicador de prueba vencida */}
         {m.vencida && (
