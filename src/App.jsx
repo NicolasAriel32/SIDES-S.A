@@ -620,7 +620,7 @@ const dataService = {
     // v6: si es auto-PENDIENTE (60 min sin carga), resultado queda null y estado_final='PENDIENTE'
     const esPendienteAuto = test.autoPendiente === true
     const tuvoFalla = esPendienteAuto ? false : (test.estado === 'RECHAZADO')
-    const resultado = esPendienteAuto ? null : (tuvoFalla ? 'RECHAZADO' : 'OK')
+    const resultado = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'RECHAZADO' : 'OK')  // FIX: columna NOT NULL
     const estadoFinal = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'PENDIENTE_APROBACION' : 'OK')
 
     // 4) Insert en pruebas
@@ -2923,11 +2923,14 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const idealAhora = 6;
   const machinesProgress = machinesIntegradas.map(m => {
     const mTests = tests.filter(t => t.maquina === m.id);
-    const reales = mTests.length;
-    // Última prueba completada (no PENDIENTE) para detectar si la máquina está vencida
-    const completadas = mTests.filter(t => t.estadoFinal !== 'PENDIENTE' && t.estadoFinal !== 'PENDIENTE_APROBACION');
-    const ultimaPruebaTs = completadas.length > 0
-      ? completadas.reduce((latest, t) => {
+    // PENDIENTE = señal llegó pero operario no completó en tiempo → no cuenta como prueba real
+    const pendientesCount = mTests.filter(t => t.estadoFinal === 'PENDIENTE').length;
+    const completadas = mTests.filter(t => t.estadoFinal !== 'PENDIENTE');
+    const reales = completadas.length;
+    // Última prueba completada para detectar si la máquina está vencida
+    const sinAprobacion = completadas.filter(t => t.estadoFinal !== 'PENDIENTE_APROBACION');
+    const ultimaPruebaTs = sinAprobacion.length > 0
+      ? sinAprobacion.reduce((latest, t) => {
           const ts = new Date(t.timestampSenal || t.timestamp);
           return ts > latest ? ts : latest;
         }, new Date(0))
@@ -2935,9 +2938,12 @@ const VistaSupervisor = ({ t, currentUser }) => {
     const minSinPrueba = ultimaPruebaTs
       ? Math.floor((Date.now() - ultimaPruebaTs.getTime()) / 60000)
       : null;
-    // Vencida: más de 60 min sin prueba completada (solo si ya hubo al menos una)
-    const vencida = minSinPrueba !== null && minSinPrueba >= 60;
-    return { ...m, reales: Math.min(reales, 8), ideal: idealAhora, pct: Math.round((reales / idealAhora) * 100), ultimaPruebaTs, minSinPrueba, vencida };
+    // Vencida: >60 min sin prueba completada, solo si no hay ya un PENDIENTE registrado
+    // (si hay PENDIENTE, el timer es estático — ya se sabe que no se completó)
+    const vencida = pendientesCount === 0 && minSinPrueba !== null && minSinPrueba >= 60;
+    return { ...m, reales: Math.min(reales, 8), ideal: idealAhora,
+             pct: Math.round((reales / Math.max(idealAhora, 1)) * 100),
+             ultimaPruebaTs, minSinPrueba, vencida, pendientesCount };
   });
 
   const enAprobacion = tests.find(t => t.esperandoAprobacion);
@@ -3481,8 +3487,21 @@ const MachineRowMejorada = ({ m, t }) => {
         <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 2 }}>
           {m.linea || ''}
         </div>
-        {/* Indicador de prueba vencida */}
-        {m.vencida && (
+        {/* Badge PENDIENTE estático — señal recibida, operario no completó */}
+        {m.pendientesCount > 0 && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            marginTop: 4, padding: '2px 7px', borderRadius: 4,
+            background: '#ff4d4d22', border: '1px solid #ff4d4d66'
+          }}>
+            <AlertTriangle size={10} color="#ff4d4d" />
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: '#ff4d4d', fontWeight: 600 }}>
+              {m.pendientesCount} pendiente{m.pendientesCount > 1 ? 's' : ''}
+            </span>
+          </div>
+        )}
+        {/* Indicador vencida (solo si no hay pendientes registrados) */}
+        {m.vencida && m.pendientesCount === 0 && (
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 4,
             marginTop: 4, padding: '2px 7px', borderRadius: 4,
