@@ -2923,14 +2923,15 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const idealAhora = 6;
   const machinesProgress = machinesIntegradas.map(m => {
     const mTests = tests.filter(t => t.maquina === m.id);
-    // PENDIENTE = señal llegó pero operario no completó en tiempo → no cuenta como prueba real
-    const pendientesCount = mTests.filter(t => t.estadoFinal === 'PENDIENTE').length;
-    const completadas = mTests.filter(t => t.estadoFinal !== 'PENDIENTE');
-    const reales = completadas.length;
-    // Última prueba completada para detectar si la máquina está vencida
-    const sinAprobacion = completadas.filter(t => t.estadoFinal !== 'PENDIENTE_APROBACION');
-    const ultimaPruebaTs = sinAprobacion.length > 0
-      ? sinAprobacion.reduce((latest, t) => {
+    // Desglose por resultado
+    const pendientesCount  = mTests.filter(t => t.estadoFinal === 'PENDIENTE').length;
+    const rechazadasCount  = mTests.filter(t => t.estado === 'RECHAZADO' && t.estadoFinal !== 'PENDIENTE').length;
+    const okCount          = mTests.filter(t => t.estado !== 'RECHAZADO' && t.estadoFinal !== 'PENDIENTE').length;
+    const completadas      = mTests.filter(t => t.estadoFinal !== 'PENDIENTE');
+    const reales           = completadas.length;  // solo completas cuentan en el progreso
+    // Última prueba completada (sin espera de aprobación)
+    const ultimaPruebaTs = completadas.length > 0
+      ? completadas.reduce((latest, t) => {
           const ts = new Date(t.timestampSenal || t.timestamp);
           return ts > latest ? ts : latest;
         }, new Date(0))
@@ -2938,12 +2939,12 @@ const VistaSupervisor = ({ t, currentUser }) => {
     const minSinPrueba = ultimaPruebaTs
       ? Math.floor((Date.now() - ultimaPruebaTs.getTime()) / 60000)
       : null;
-    // Vencida: >60 min sin prueba completada, solo si no hay ya un PENDIENTE registrado
-    // (si hay PENDIENTE, el timer es estático — ya se sabe que no se completó)
+    // Vencida solo cuando no hay actividad ni pendientes registrados
     const vencida = pendientesCount === 0 && minSinPrueba !== null && minSinPrueba >= 60;
     return { ...m, reales: Math.min(reales, 8), ideal: idealAhora,
              pct: Math.round((reales / Math.max(idealAhora, 1)) * 100),
-             ultimaPruebaTs, minSinPrueba, vencida, pendientesCount };
+             ultimaPruebaTs, minSinPrueba, vencida,
+             okCount, rechazadasCount, pendientesCount };
   });
 
   const enAprobacion = tests.find(t => t.esperandoAprobacion);
@@ -3465,77 +3466,90 @@ const NCHistoryRow = ({ nc, t, index, onClick }) => {
 };
 
 const MachineRowMejorada = ({ m, t }) => {
-  const tone = m.pct >= 95 ? 'success' : m.pct >= 70 ? 'warn' : 'danger';
-  const colors = { success: t.success, warn: t.warn, danger: t.danger };
-  const icons = { success: CheckCircle2, warn: AlertCircle, danger: AlertTriangle };
-  const StatusIcon = icons[tone];
+  const tone = m.pendientesCount > 0 ? 'warn'
+    : m.rechazadasCount > 0         ? 'danger'
+    : m.vencida                     ? 'warn'
+    : m.pct >= 95                   ? 'success'
+    : m.pct >= 70                   ? 'warn'
+    : 'danger';
+  const barColor = m.pendientesCount > 0 ? t.warn
+    : m.pct >= 95 ? t.success : m.pct >= 70 ? t.warn : t.danger;
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: '160px 1fr 90px 60px',
-      gap: 14, padding: '14px 0', borderBottom: `1px solid ${t.border}`, alignItems: 'center',
-      // Fondo suave naranja si la máquina está vencida
-      background: m.vencida ? '#ff980008' : 'transparent',
-      borderRadius: m.vencida ? 8 : 0,
-      paddingLeft: m.vencida ? 10 : 0,
-      paddingRight: m.vencida ? 10 : 0,
+      padding: '12px 0', borderBottom: `1px solid ${t.border}`,
+      background: m.vencida && m.pendientesCount === 0 ? '#ff980008' : 'transparent',
     }}>
-      <div>
-        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: t.text, fontWeight: 600, letterSpacing: '0.02em' }}>
-          {m.id}
-        </div>
-        <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 2 }}>
-          {m.linea || ''}
-        </div>
-        {/* Badge PENDIENTE estático — señal recibida, operario no completó */}
-        {m.pendientesCount > 0 && (
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            marginTop: 4, padding: '2px 7px', borderRadius: 4,
-            background: '#ff4d4d22', border: '1px solid #ff4d4d66'
-          }}>
-            <AlertTriangle size={10} color="#ff4d4d" />
-            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: '#ff4d4d', fontWeight: 600 }}>
-              {m.pendientesCount} pendiente{m.pendientesCount > 1 ? 's' : ''}
-            </span>
+      {/* Fila principal */}
+      <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr 80px', gap: 14, alignItems: 'center' }}>
+        <div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: t.text, fontWeight: 600 }}>
+            {m.id}
           </div>
-        )}
-        {/* Indicador vencida (solo si no hay pendientes registrados) */}
-        {m.vencida && m.pendientesCount === 0 && (
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            marginTop: 4, padding: '2px 7px', borderRadius: 4,
-            background: '#ff980022', border: '1px solid #ff980066',
-            animation: 'neonPulse 1.5s ease-in-out infinite'
-          }}>
-            <Clock size={10} color="#ff9800" />
-            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: '#ff9800', fontWeight: 600 }}>
-              {m.minSinPrueba}m sin prueba
-            </span>
+          <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textMuted, marginTop: 1 }}>
+            {m.linea || ''}
           </div>
-        )}
-      </div>
-      <div style={{ height: 12, background: t.surfaceHi, borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
-        <div style={{ width: `${Math.min(m.pct, 100)}%`, height: '100%', background: colors[tone], borderRadius: 6, transition: 'width 0.3s' }} />
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: t.text, fontWeight: 600 }}>
-          {m.reales} <span style={{ color: t.textDim, fontSize: 12 }}>/ {m.ideal}</span>
         </div>
-        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: colors[tone], fontWeight: 500 }}>{m.pct}%</div>
+
+        {/* Barra de progreso */}
+        <div style={{ height: 10, background: t.surfaceHi, borderRadius: 5, overflow: 'hidden' }}>
+          <div style={{
+            width: `${Math.min(m.pct, 100)}%`, height: '100%',
+            background: barColor, borderRadius: 5, transition: 'width 0.3s'
+          }} />
+        </div>
+
+        {/* Conteo y % */}
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 14, color: t.text, fontWeight: 600 }}>
+            {m.reales}<span style={{ color: t.textDim, fontSize: 11 }}>/{m.ideal}</span>
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: barColor }}>{m.pct}%</div>
+        </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+
+      {/* Fila de desglose — siempre visible si hay alguna prueba */}
+      {(m.okCount > 0 || m.rechazadasCount > 0 || m.pendientesCount > 0) && (
         <div style={{
-          width: 32, height: 32, borderRadius: 6,
-          background: m.vencida ? '#ff980020' : colors[tone] + '20',
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
+          display: 'flex', alignItems: 'center', gap: 12,
+          marginTop: 6, paddingLeft: 0, flexWrap: 'wrap'
         }}>
-          {m.vencida
-            ? <Clock size={16} color="#ff9800" style={{ animation: 'neonPulse 1.5s ease-in-out infinite' }} />
-            : <StatusIcon size={16} color={colors[tone]} />
-          }
+          {m.okCount > 0 && (
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: t.success, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <CheckCircle2 size={11} /> {m.okCount} OK
+            </span>
+          )}
+          {m.rechazadasCount > 0 && (
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: t.danger, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <AlertTriangle size={11} /> {m.rechazadasCount} rechazada{m.rechazadasCount > 1 ? 's' : ''}
+            </span>
+          )}
+          {m.pendientesCount > 0 && (
+            <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: t.warn, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Clock size={11} /> {m.pendientesCount} pendiente{m.pendientesCount > 1 ? 's' : ''}
+            </span>
+          )}
+          {/* Timer vencida solo si no hay pendientes registrados y la máquina está vencida */}
+          {m.vencida && m.pendientesCount === 0 && (
+            <span style={{
+              fontFamily: 'JetBrains Mono', fontSize: 11, color: '#ff9800',
+              display: 'flex', alignItems: 'center', gap: 4,
+              animation: 'neonPulse 1.5s ease-in-out infinite'
+            }}>
+              <Clock size={11} />
+              {m.minSinPrueba >= 60
+                ? `${Math.floor(m.minSinPrueba / 60)}h ${m.minSinPrueba % 60}m sin prueba`
+                : `${m.minSinPrueba}m sin prueba`}
+            </span>
+          )}
         </div>
-      </div>
+      )}
+      {/* Sin actividad registrada aún */}
+      {m.okCount === 0 && m.rechazadasCount === 0 && m.pendientesCount === 0 && !m.vencida && (
+        <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.textDim, marginTop: 5 }}>
+          Sin pruebas aún en este turno
+        </div>
+      )}
     </div>
   );
 };
