@@ -2993,10 +2993,11 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
   const enviarObservacion = async (mensaje) => {
     await dataService.addObservation({
-      testId:          observarTest.id,
-      maquina:         observarTest.maquina,
-      legajoOperario:  observarTest.legajoOperario,
-      supervisor:      `${currentUser.nombre} ${currentUser.apellido}`,
+      testId:           observarTest.id,
+      pruebaId:         observarTest.supabase_id,   // FIX: evita lookup por numero_secuencial
+      maquina:          observarTest.maquina,
+      legajoOperario:   observarTest.legajoOperario,
+      supervisor:       `${currentUser.nombre} ${currentUser.apellido}`,
       mensaje,
     })
     await dataService.logEvent({
@@ -3027,13 +3028,14 @@ const VistaSupervisor = ({ t, currentUser }) => {
     try {
       await dataService.updateTest(enAprobacion.id, { esperandoAprobacion: false, aprobado: true });
       await dataService.createNC({
-        pruebaId: enAprobacion.id,
-        maquina: enAprobacion.maquina,
-        operario: enAprobacion.operario,
-        tipos: enAprobacion.tipos,
-        cabezalesFalla: enAprobacion.cabezalesFalla,
-        observaciones: enAprobacion.observaciones,
-        aprobadoPor: `${currentUser.nombre} ${currentUser.apellido}`,
+        pruebaId:        enAprobacion.id,
+        pruebaSupabaseId: enAprobacion.supabase_id,  // FIX: evita lookup por numero_secuencial
+        maquina:         enAprobacion.maquina,
+        operario:        enAprobacion.operario,
+        tipos:           enAprobacion.tipos,
+        cabezalesFalla:  enAprobacion.cabezalesFalla,
+        observaciones:   enAprobacion.observaciones,
+        aprobadoPor:     `${currentUser.nombre} ${currentUser.apellido}`,
       });
       await dataService.logEvent({
         accion: 'APPROVE', usuario: `${currentUser.nombre} ${currentUser.apellido}`,
@@ -3880,7 +3882,7 @@ const AdminDashboard = ({ t }) => {
                 alignItems: 'center', fontSize: 12
               }}>
                 <span style={{ fontFamily: 'JetBrains Mono', color: t.textDim }}>
-                  {new Date(e.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {new Date(e.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })}
                 </span>
                 <span style={{ textAlign: 'center' }}>
                   <Pill variant={
