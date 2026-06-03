@@ -228,6 +228,17 @@ const turnoDeFecha = (date) => {
   return 'N'
 }
 
+// Helper: ventana [desde, hasta) del turno ANTERIOR al actual, en instantes UTC.
+// Los tres turnos duran 8 h, así que el anterior es [inicioActual - 8h, inicioActual).
+// codigoAnterior es el código (M/T/N) de ese turno previo.
+const ventanaTurnoAnterior = (now = new Date()) => {
+  const finAnterior    = inicioTurnoActual(now);
+  const inicioAnterior = new Date(finAnterior.getTime() - 8 * 60 * 60 * 1000);
+  // +1h para caer con seguridad dentro del turno anterior y leer su código.
+  const codigoAnterior = turnoDeFecha(new Date(inicioAnterior.getTime() + 60 * 60 * 1000));
+  return { inicioAnterior, finAnterior, codigoAnterior };
+};
+
 const dataService = {
 
   // ===== USUARIOS =====
@@ -515,6 +526,166 @@ const dataService = {
       return horaActual >= inicio || horaActual < fin
     })
     return turno?.id ?? null
+  },
+
+  // ===== VERIFICACIONES FÍSICAS (anti-fraude ISO 9001 · rastreabilidad IRAM) =====
+  // Al iniciar un turno, el supervisor entrante debe corroborar físicamente
+  // 2 pruebas elegidas al azar del turno anterior (contramuestra en almacén).
+  // La RLS ya restringe qué ve/edita cada supervisor (supervisor_asignado_id =
+  // auth.uid()), así que toda esta lógica corre del lado del cliente, igual
+  // que el resto del sistema.
+  CANTIDAD_VERIFICACIONES: 2,
+
+  // Devuelve las verificaciones del supervisor logueado que siguen PENDIENTE,
+  // con los datos de la prueba a buscar en el almacén.
+  async getVerificacionesPendientes() {
+    const { data, error } = await supabase
+      .from('verificaciones_fisicas')
+      .select(`
+        *,
+        prueba:prueba_id (
+          numero_secuencial, id_maquina, numero_caja, numero_lote,
+          codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado
+        )
+      `)
+      .eq('resultado', 'PENDIENTE')
+      .order('fecha_seleccion', { ascending: true })
+
+    console.log('getVerificacionesPendientes response:', { data, error })
+    if (error) { console.error('getVerificacionesPendientes:', error); return [] }
+
+    const usuariosMap = await this.getUsersCache()
+    return (data || []).map(v => {
+      const p = v.prueba || {}
+      const fechaP = p.timestamp_recibida || p.fecha_hora
+      const codigoPrueba =
+        `PRB-${(fechaLocalAR(fechaP) || '').replace(/-/g, '')}` +
+        `-${String(p.numero_secuencial || 0).padStart(4, '0')}`
+      return {
+        id:             v.id,
+        codigo:         v.codigo,
+        resultado:      v.resultado,
+        pruebaId:       v.prueba_id,
+        codigoPrueba,
+        maquina:        p.id_maquina,
+        caja:           p.numero_caja,
+        lote:           p.numero_lote,
+        codigoProducto: p.codigo_producto,
+        resultadoPrueba: p.resultado,
+        operario:       usuariosMap.get(p.operario_legajo) || p.operario_legajo || '',
+        fechaSenal:     normalizarFechaUTC(fechaP),
+      }
+    })
+  },
+
+  // Asigna (una sola vez, idempotente) las verificaciones del turno ANTERIOR
+  // al supervisor entrante. Devuelve true si hay algo pendiente de verificar.
+  async asegurarVerificacionesTurnoAnterior(supervisorAuthId, supervisorLegajo, supervisorNombre) {
+    if (!supervisorAuthId) {
+      const { data: { user } } = await supabase.auth.getUser()
+      supervisorAuthId = user?.id
+    }
+    if (!supervisorAuthId) { console.error('asegurarVerificaciones: sin auth uid'); return false }
+
+    const { inicioAnterior, finAnterior, codigoAnterior } = ventanaTurnoAnterior()
+
+    // 1) Pruebas no anuladas del turno anterior
+    const { data: pruebasTurno, error: errPruebas } = await supabase
+      .from('pruebas')
+      .select('id, numero_secuencial')
+      .gte('created_at', inicioAnterior.toISOString())
+      .lt('created_at', finAnterior.toISOString())
+      .eq('anulada', false)
+
+    if (errPruebas) { console.error('asegurarVerificaciones pruebas:', errPruebas); return false }
+    if (!pruebasTurno || pruebasTurno.length === 0) {
+      console.log('asegurarVerificaciones: turno anterior sin pruebas; nada que verificar')
+      return false
+    }
+
+    // 2) Idempotencia: ¿ya hay verificaciones para alguna de esas pruebas?
+    const ids = pruebasTurno.map(p => p.id)
+    const { data: yaExisten, error: errExist } = await supabase
+      .from('verificaciones_fisicas')
+      .select('id')
+      .in('prueba_id', ids)
+      .limit(1)
+
+    if (errExist) { console.error('asegurarVerificaciones existentes:', errExist); return false }
+    if (yaExisten && yaExisten.length > 0) {
+      console.log('asegurarVerificaciones: el turno anterior ya tenía verificaciones asignadas')
+      return true
+    }
+
+    // 3) Elegir N pruebas al azar e insertarlas
+    const barajadas = [...pruebasTurno].sort(() => Math.random() - 0.5)
+    const elegidas  = barajadas.slice(0, this.CANTIDAD_VERIFICACIONES)
+    const turnos    = await this.getTurnos()
+    const turnoOrigenId = turnos.find(tn => tn.codigo === codigoAnterior)?.id || null
+    const fechaCod  = (fechaLocalAR(new Date()) || '').replace(/-/g, '')
+
+    const filas = elegidas.map(p => ({
+      codigo:                 `VF-${fechaCod}-${String(p.numero_secuencial).padStart(4, '0')}`,
+      prueba_id:              p.id,
+      turno_origen_id:        turnoOrigenId,
+      supervisor_asignado_id: supervisorAuthId,
+      resultado:              'PENDIENTE',
+    }))
+
+    const { data: insertadas, error: errInsert } = await supabase
+      .from('verificaciones_fisicas')
+      .insert(filas)
+      .select()
+
+    if (errInsert) { console.error('asegurarVerificaciones insert:', errInsert); return false }
+
+    await this.logEvent({
+      accion:        'CREATE',
+      usuario:       supervisorNombre || supervisorLegajo,
+      usuarioLegajo: supervisorLegajo,
+      desc:          `Asignó ${filas.length} verificaciones físicas aleatorias del turno ${codigoAnterior}`,
+      tabla:         'verificaciones_fisicas',
+    })
+    return (insertadas || []).length > 0
+  },
+
+  // Completa una verificación. resultado = OK solo si todo coincide; si no,
+  // DISCREPANCIA + genera_nc para que el supervisor abra la no conformidad.
+  async completarVerificacion(id, payload, supervisorLegajo, supervisorNombre) {
+    const ok = payload.muestrasPresentes === 'si_todas'
+      && payload.coincideEtiquetaLote === true
+      && payload.coincideCaja === true
+    const resultado = ok ? 'OK' : 'DISCREPANCIA'
+
+    const { data, error } = await supabase
+      .from('verificaciones_fisicas')
+      .update({
+        fecha_verificacion:     new Date().toISOString(),
+        muestras_presentes:     payload.muestrasPresentes,
+        cantidad_encontrada:    payload.cantidadEncontrada ?? null,
+        coincide_etiqueta_lote: payload.coincideEtiquetaLote,
+        coincide_caja:          payload.coincideCaja,
+        observaciones:          payload.observaciones || null,
+        resultado,
+        genera_nc:              resultado === 'DISCREPANCIA',
+        updated_at:             new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .maybeSingle()
+
+    console.log('completarVerificacion response:', { id, resultado, data, error })
+    if (error) { console.error('completarVerificacion:', error); return null }
+
+    await this.logEvent({
+      accion:        'UPDATE',
+      usuario:       supervisorNombre || supervisorLegajo,
+      usuarioLegajo: supervisorLegajo,
+      desc:          `Completó verificación física ${data?.codigo || id} · ${resultado}`,
+      tabla:         'verificaciones_fisicas',
+      registroId:    id,
+    })
+    return { id, resultado }
   },
 
   // ===== PRUEBAS =====
@@ -2853,6 +3024,239 @@ const HistorialPorTurno = ({ t }) => {
 };
 
 // =================================================================
+// MODAL VERIFICACIÓN FÍSICA — corroboración anti-fraude del turno anterior
+// El supervisor recorre las pruebas seleccionadas al azar, va al almacén,
+// busca la contramuestra y registra si coincide. Cualquier desvío => DISCREPANCIA.
+// =================================================================
+const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDone }) => {
+  const [idx, setIdx] = useState(0);
+  const [muestrasPresentes, setMuestrasPresentes] = useState('');
+  const [cantidadEncontrada, setCantidadEncontrada] = useState('');
+  const [coincideEtiquetaLote, setCoincideEtiquetaLote] = useState(null);
+  const [coincideCaja, setCoincideCaja] = useState(null);
+  const [observaciones, setObservaciones] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  const actual = verificaciones[idx];
+  if (!actual) return null;
+
+  const resetForm = () => {
+    setMuestrasPresentes(''); setCantidadEncontrada('');
+    setCoincideEtiquetaLote(null); setCoincideCaja(null);
+    setObservaciones('');
+  };
+
+  const completo = muestrasPresentes !== '' && coincideEtiquetaLote !== null && coincideCaja !== null;
+  const seraOk = muestrasPresentes === 'si_todas' && coincideEtiquetaLote === true && coincideCaja === true;
+
+  const horaPrueba = actual.fechaSenal
+    ? new Date(actual.fechaSenal).toLocaleString('es-AR', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        timeZone: 'America/Argentina/Buenos_Aires'
+      })
+    : '—';
+
+  const guardar = async () => {
+    if (!completo || guardando) return;
+    setGuardando(true);
+    const res = await dataService.completarVerificacion(
+      actual.id,
+      {
+        muestrasPresentes,
+        cantidadEncontrada: cantidadEncontrada !== '' ? Number(cantidadEncontrada) : null,
+        coincideEtiquetaLote,
+        coincideCaja,
+        observaciones,
+      },
+      currentUser?.legajo,
+      currentUser?.nombre
+    );
+    setGuardando(false);
+    if (!res) { alert('No se pudo guardar la verificación. Revisá la conexión e intentá de nuevo.'); return; }
+    resetForm();
+    if (idx + 1 < verificaciones.length) {
+      setIdx(idx + 1);
+    } else {
+      await onDone();
+    }
+  };
+
+  const Toggle = ({ value, onChange }) => (
+    <div style={{ display: 'flex', gap: 8 }}>
+      {[{ v: true, l: 'Sí' }, { v: false, l: 'No' }].map(o => (
+        <button key={o.l} onClick={() => onChange(o.v)} style={{
+          flex: 1, padding: '8px 0', borderRadius: 6, cursor: 'pointer',
+          fontFamily: 'Manrope', fontSize: 13, fontWeight: 600,
+          border: `1px solid ${value === o.v ? (o.v ? t.success : t.danger) : t.border}`,
+          background: value === o.v ? (o.v ? t.success + '22' : t.danger + '22') : t.surfaceHi,
+          color: value === o.v ? (o.v ? t.success : t.danger) : t.textMuted,
+        }}>{o.l}</button>
+      ))}
+    </div>
+  );
+
+  const Campo = ({ label, valor }) => (
+    <div>
+      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 9, color: t.textDim, letterSpacing: '0.1em', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, fontWeight: 600 }}>{valor || '—'}</div>
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+      backdropFilter: 'blur(4px)', zIndex: 250,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40
+    }}>
+      <div style={{
+        background: t.surface, border: `1px solid ${t.border}`,
+        borderRadius: 12, width: '100%', maxWidth: 560, maxHeight: '88vh', overflow: 'auto'
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '18px 24px', borderBottom: `1px solid ${t.border}`,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          position: 'sticky', top: 0, background: t.surface, zIndex: 1
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Fingerprint size={18} color={t.warn} />
+            <div>
+              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 17, fontWeight: 600, color: t.text }}>
+                Verificación física del turno anterior
+              </div>
+              <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>
+                {actual.codigo} · {idx + 1} de {verificaciones.length}
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            background: t.surfaceHi, border: `1px solid ${t.border}`, color: t.textMuted,
+            padding: 6, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center'
+          }}><X size={14} /></button>
+        </div>
+
+        <div style={{ padding: 24 }}>
+          <div style={{ fontFamily: 'Manrope', fontSize: 13, color: t.textMuted, marginBottom: 16 }}>
+            Buscá esta contramuestra en el almacén y registrá lo que encontrás. Si algo no coincide, marcá <b>No</b>: se registra como discrepancia.
+          </div>
+
+          {/* Datos de la prueba a buscar */}
+          <div style={{
+            background: t.surfaceHi, border: `1px solid ${t.border}`, borderRadius: 8,
+            padding: 16, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 20
+          }}>
+            <Campo label="PRUEBA" valor={actual.codigoPrueba} />
+            <Campo label="MÁQUINA" valor={actual.maquina} />
+            <Campo label="HORA" valor={horaPrueba} />
+            <Campo label="N° CAJA" valor={actual.caja} />
+            <Campo label="N° LOTE" valor={actual.lote} />
+            <Campo label="PRODUCTO" valor={actual.codigoProducto} />
+          </div>
+
+          {/* Formulario */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                ¿Están presentes las muestras en el almacén?
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[
+                  { v: 'si_todas', l: 'Sí, todas' },
+                  { v: 'parcial',  l: 'Parcial' },
+                  { v: 'no',       l: 'No' },
+                ].map(o => (
+                  <button key={o.v} onClick={() => setMuestrasPresentes(o.v)} style={{
+                    flex: 1, padding: '8px 0', borderRadius: 6, cursor: 'pointer',
+                    fontFamily: 'Manrope', fontSize: 13, fontWeight: 600,
+                    border: `1px solid ${muestrasPresentes === o.v ? t.accent : t.border}`,
+                    background: muestrasPresentes === o.v ? t.accent + '22' : t.surfaceHi,
+                    color: muestrasPresentes === o.v ? t.accent : t.textMuted,
+                  }}>{o.l}</button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                Cantidad encontrada (opcional)
+              </div>
+              <input
+                type="number" min="0" value={cantidadEncontrada}
+                onChange={e => setCantidadEncontrada(e.target.value)}
+                placeholder="N° de unidades halladas"
+                style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 6,
+                  border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text,
+                  fontFamily: 'Manrope', fontSize: 13, boxSizing: 'border-box'
+                }} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div>
+                <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                  ¿Coincide etiqueta/lote?
+                </div>
+                <Toggle value={coincideEtiquetaLote} onChange={setCoincideEtiquetaLote} />
+              </div>
+              <div>
+                <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                  ¿Coincide la caja?
+                </div>
+                <Toggle value={coincideCaja} onChange={setCoincideCaja} />
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                Observaciones {!seraOk && completo ? '(recomendado para la discrepancia)' : '(opcional)'}
+              </div>
+              <textarea
+                value={observaciones} onChange={e => setObservaciones(e.target.value)}
+                rows={3} placeholder="Detalle de lo encontrado en el almacén…"
+                style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 6,
+                  border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text,
+                  fontFamily: 'Manrope', fontSize: 13, resize: 'vertical', boxSizing: 'border-box'
+                }} />
+            </div>
+
+            {completo && (
+              <div style={{
+                padding: '10px 14px', borderRadius: 8,
+                background: seraOk ? t.success + '18' : t.danger + '18',
+                border: `1px solid ${(seraOk ? t.success : t.danger)}55`,
+                display: 'flex', alignItems: 'center', gap: 10
+              }}>
+                {seraOk
+                  ? <CheckCircle2 size={16} color={t.success} />
+                  : <AlertTriangle size={16} color={t.danger} />}
+                <span style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: seraOk ? t.success : t.danger }}>
+                  {seraOk
+                    ? 'Resultado: OK — la contramuestra coincide.'
+                    : 'Resultado: DISCREPANCIA — se marcará para abrir una no conformidad.'}
+                </span>
+              </div>
+            )}
+
+            <button onClick={guardar} disabled={!completo || guardando} style={{
+              width: '100%', padding: 12, borderRadius: 8, border: 'none',
+              cursor: completo && !guardando ? 'pointer' : 'not-allowed',
+              background: completo && !guardando ? t.accent : t.surfaceHi,
+              color: completo && !guardando ? t.bg : t.textMuted,
+              fontFamily: 'Bricolage Grotesque', fontSize: 14, fontWeight: 600
+            }}>
+              {guardando
+                ? 'Guardando…'
+                : (idx + 1 < verificaciones.length ? 'Registrar y siguiente' : 'Registrar y finalizar')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// =================================================================
 // VISTA SUPERVISOR (con cambios v4)
 // =================================================================
 
@@ -2871,6 +3275,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // Pareto: ventana de tiempo seleccionada + datos históricos
   const [ventanaPareto, setVentanaPareto] = useState('turno');
   const [testsHistorico, setTestsHistorico] = useState([]);
+  // Verificaciones físicas del turno anterior (anti-fraude)
+  const [verifPendientes, setVerifPendientes] = useState([]);
+  const [mostrarVerif, setMostrarVerif] = useState(false);
 
   const reload = async () => {
     setMachines(await dataService.getMachines());
@@ -2879,12 +3286,34 @@ const VistaSupervisor = ({ t, currentUser }) => {
     setTests(await dataService.getTests(inicioTurnoActual()));
     setNcHistory(await dataService.getNCHistory());
     setUnreadObs(await dataService.getAllUnreadObservations());
+    setVerifPendientes(await dataService.getVerificacionesPendientes());
   };
 
   useEffect(() => {
     reload();
     const interval = setInterval(reload, 15000); // FIX v5: refresh cada 15s (era 30s)
     return () => clearInterval(interval);
+  }, []);
+
+  // Verificaciones físicas: al ingresar el supervisor, asignar (si todavía no
+  // existen) 2 pruebas al azar del turno anterior y pedirle que las corrobore.
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        await dataService.asegurarVerificacionesTurnoAnterior(
+          null, currentUser?.legajo, currentUser?.nombre
+        );
+        const pend = await dataService.getVerificacionesPendientes();
+        if (!cancelado) {
+          setVerifPendientes(pend);
+          if (pend.length > 0) setMostrarVerif(true);
+        }
+      } catch (e) {
+        console.error('init verificaciones físicas:', e);
+      }
+    })();
+    return () => { cancelado = true; };
   }, []);
 
   // Carga histórica para el Pareto semanal/mensual (una sola vez al montar)
@@ -3150,6 +3579,20 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </div>
       )}
 
+      {mostrarVerif && verifPendientes.length > 0 && (
+        <ModalVerificacionFisica
+          t={t}
+          currentUser={currentUser}
+          verificaciones={verifPendientes}
+          onClose={() => setMostrarVerif(false)}
+          onDone={async () => {
+            const pend = await dataService.getVerificacionesPendientes();
+            setVerifPendientes(pend);
+            setMostrarVerif(false);
+          }}
+        />
+      )}
+
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 32, fontWeight: 600, color: t.text, marginBottom: 4, letterSpacing: '-0.02em' }}>
           {tabActiva === 'turno' ? 'Turno mañana · en curso' : 'Historial por turno'}
@@ -3240,18 +3683,33 @@ const VistaSupervisor = ({ t, currentUser }) => {
           tone="success" />
       </div>
 
-      <Card t={t} padding={20} style={{ marginBottom: 24 }}>
+      <Card t={t} padding={20} style={{
+        marginBottom: 24,
+        ...(verifPendientes.length > 0 ? { borderColor: t.warn + '60', background: t.warnSoft } : {})
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Fingerprint size={18} color={t.textDim} />
+          <Fingerprint size={18} color={verifPendientes.length > 0 ? t.warn : t.textDim} />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>
               Verificaciones físicas aleatorias
             </div>
             <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>
-              Aún no hay datos disponibles. Las verificaciones aparecerán acá una vez que el sistema acumule pruebas del turno anterior.
+              {verifPendientes.length > 0
+                ? `Tenés ${verifPendientes.length} ${verifPendientes.length === 1 ? 'prueba del turno anterior' : 'pruebas del turno anterior'} por corroborar físicamente en el almacén.`
+                : 'No hay verificaciones pendientes. El sistema asigna 2 pruebas al azar del turno anterior al iniciar cada turno.'}
             </div>
           </div>
-          <Pill variant="default" t={t} mono>SIN DATOS</Pill>
+          {verifPendientes.length > 0 ? (
+            <button onClick={() => setMostrarVerif(true)} style={{
+              background: t.warn, color: t.bg, border: 'none', borderRadius: 6,
+              padding: '8px 14px', cursor: 'pointer',
+              fontFamily: 'Bricolage Grotesque', fontSize: 13, fontWeight: 600
+            }}>
+              Verificar ahora ({verifPendientes.length})
+            </button>
+          ) : (
+            <Pill variant="success" t={t} mono>AL DÍA</Pill>
+          )}
         </div>
       </Card>
 
