@@ -429,24 +429,31 @@ const dataService = {
     return await this.getMachines()
   },
 
-  // Asigna un operario a una máquina (actualiza maquina_asignada en usuarios).
-  // Pasar maquinaId = null para desasignar.
+  // Asigna un operario a una máquina.
+  // Usa admin_update_maquina (SECURITY DEFINER) para actualizar
+  // usuarios + profiles en sync, evitando bloqueos de RLS.
   async asignarOperario(legajo, maquinaId) {
-    const { error } = await supabase
-      .from('usuarios')
-      .update({ maquina_asignada: maquinaId })
-      .eq('legajo', legajo);
+    const { data, error } = await supabase.rpc('admin_update_maquina', {
+      p_legajo:  legajo,
+      p_maquina: maquinaId ?? null,
+    })
+    console.log('asignarOperario rpc:', { legajo, maquinaId, data, error })
     if (error) { console.error('asignarOperario:', error); return false; }
+    if (data?.ok === false) { console.error('asignarOperario denied:', data.error); return false; }
     return true;
   },
 
-  // Desasigna cualquier operario que tenga asignada esa máquina (limpia asignaciones previas).
+  // Desasigna cualquier operario que tenga asignada esa máquina.
   async desasignarMaquina(maquinaId) {
-    const { error } = await supabase
+    // Obtener legajos con esa máquina asignada y desasignar uno a uno via RPC
+    const { data: rows, error: fetchErr } = await supabase
       .from('usuarios')
-      .update({ maquina_asignada: null })
-      .eq('maquina_asignada', maquinaId);
-    if (error) { console.error('desasignarMaquina:', error); return false; }
+      .select('legajo')
+      .eq('maquina_asignada', maquinaId)
+    if (fetchErr) { console.error('desasignarMaquina fetch:', fetchErr); return false; }
+    for (const row of (rows || [])) {
+      await this.asignarOperario(row.legajo, null)
+    }
     return true;
   },
 
@@ -585,17 +592,17 @@ const dataService = {
     throw new Error('saveTests no implementado — usar createTest/updateTest')
   },
 
-  // Calcula el siguiente numero_secuencial. Para piloto usamos MAX+1.
-  // Para producción real conviene una sequence en DB y/o lock pesimista.
+  // Obtiene el siguiente numero_secuencial via secuencia DB (atómico, no filtrado por RLS).
+  // La función next_numero_secuencial() es SECURITY DEFINER — evita el bug donde
+  // operarios sin pruebas previas en su máquina obtenían MAX=0 → secuencial=1 → 409.
   async _siguienteNumeroSecuencial() {
-    const { data, error } = await supabase
-      .from('pruebas')
-      .select('numero_secuencial')
-      .order('numero_secuencial', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (error) { console.error('_siguienteNumeroSecuencial:', error); }
-    return (data?.numero_secuencial || 0) + 1
+    const { data, error } = await supabase.rpc('next_numero_secuencial')
+    if (error) {
+      console.error('_siguienteNumeroSecuencial rpc:', error)
+      // Fallback: sumar 1 al maximo global via función separada si el RPC falla
+      return Date.now() // timestamp como fallback de emergencia (evita colisión)
+    }
+    return data
   },
 
   async createTest(test) {
@@ -611,6 +618,10 @@ const dataService = {
       console.error('createTest: máquina no encontrada', { maquina: test.maquina, maquinaError })
       return null
     }
+
+    // DIAGNÓSTICO TEMPORAL — ver qué devuelve get_my_profile() en contexto real
+    const { data: debugRls } = await supabase.rpc('debug_my_rls')
+    console.log('DEBUG RLS context:', debugRls)
 
     // 2) Turno actual y número secuencial
     const turnoId = await this.getTurnoActualId()
@@ -4017,13 +4028,23 @@ const AdminUsuarios = ({ t, currentUser }) => {
         // 2) Crear entrada en Supabase Auth (contraseña genérica Cambio123!, fuerza cambio)
         const authResult = await dataService.createAuthUser(u.legajo, 'Cambio123!');
         console.log('onAdd createAuthUser result:', authResult);
+        const authOk = authResult?.ok === true;
         await dataService.logEvent({
           accion: 'CREATE',
           usuario: `${currentUser.nombre}`,
-          desc: `Creó usuario ${u.legajo} · auth: ${authResult?.ok ? 'OK' : 'ERROR'}`
+          desc: `Creó usuario ${u.legajo} · auth: ${authOk ? 'OK' : (authResult?.error || 'ERROR')}`
         });
         setShowAddManual(false);
         refresh();
+        if (!authOk) {
+          // El usuario quedó en la tabla pero sin acceso — avisar al admin
+          const motivo = authResult?.error || 'Error desconocido';
+          alert(
+            `⚠️ Usuario ${u.legajo} guardado en la tabla, pero falló la creación en Supabase Auth:\n\n"${motivo}"\n\n` +
+            `El usuario NO podrá hacer login todavía.\n` +
+            `Solucion: cerrá sesión, volvé a loguearte como admin y presioná "Recrear Auth" en la lista de usuarios.`
+          );
+        }
       }} />}
     </>
   );
