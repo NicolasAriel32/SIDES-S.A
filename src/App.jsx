@@ -3029,7 +3029,10 @@ const HistorialPorTurno = ({ t }) => {
 // busca la contramuestra y registra si coincide. Cualquier desvío => DISCREPANCIA.
 // =================================================================
 const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDone }) => {
-  const [idx, setIdx] = useState(0);
+  // Copia interna: el modal NO depende de la lista del padre (que se refresca
+  // cada 15s). Así, al completar una verificación no se "desfasa" el índice.
+  const [pendientes, setPendientes] = useState(verificaciones);
+  const [total] = useState(verificaciones.length);
   const [muestrasPresentes, setMuestrasPresentes] = useState('');
   const [cantidadEncontrada, setCantidadEncontrada] = useState('');
   const [coincideEtiquetaLote, setCoincideEtiquetaLote] = useState(null);
@@ -3037,8 +3040,9 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
   const [observaciones, setObservaciones] = useState('');
   const [guardando, setGuardando] = useState(false);
 
-  const actual = verificaciones[idx];
+  const actual = pendientes[0];
   if (!actual) return null;
+  const numeroActual = total - pendientes.length + 1;
 
   const resetForm = () => {
     setMuestrasPresentes(''); setCantidadEncontrada('');
@@ -3074,10 +3078,11 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
     setGuardando(false);
     if (!res) { alert('No se pudo guardar la verificación. Revisá la conexión e intentá de nuevo.'); return; }
     resetForm();
-    if (idx + 1 < verificaciones.length) {
-      setIdx(idx + 1);
-    } else {
+    const resto = pendientes.slice(1);
+    if (resto.length === 0) {
       await onDone();
+    } else {
+      setPendientes(resto);
     }
   };
 
@@ -3125,7 +3130,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                 Verificación física del turno anterior
               </div>
               <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, marginTop: 2 }}>
-                {actual.codigo} · {idx + 1} de {verificaciones.length}
+                {actual.codigo} · {numeroActual} de {total}
               </div>
             </div>
           </div>
@@ -3247,7 +3252,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
             }}>
               {guardando
                 ? 'Guardando…'
-                : (idx + 1 < verificaciones.length ? 'Registrar y siguiente' : 'Registrar y finalizar')}
+                : (pendientes.length > 1 ? 'Registrar y siguiente' : 'Registrar y finalizar')}
             </button>
           </div>
         </div>
@@ -3584,7 +3589,10 @@ const VistaSupervisor = ({ t, currentUser }) => {
           t={t}
           currentUser={currentUser}
           verificaciones={verifPendientes}
-          onClose={() => setMostrarVerif(false)}
+          onClose={async () => {
+            setMostrarVerif(false);
+            setVerifPendientes(await dataService.getVerificacionesPendientes());
+          }}
           onDone={async () => {
             const pend = await dataService.getVerificacionesPendientes();
             setVerifPendientes(pend);
