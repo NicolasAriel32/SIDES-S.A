@@ -13,6 +13,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, ComposedChart, Cell
 } from 'recharts';
+import VistaControlCalidad from './VistaControlCalidad.jsx';
 
 
 /* =================================================================
@@ -4550,7 +4551,7 @@ const ModalImportarUsuarios = ({ t, onClose, onImport }) => {
       };
     });
 
-    const rolesValidos = ['operario', 'supervisor', 'admin', 'auditor'];
+    const rolesValidos = ['operario', 'supervisor', 'admin', 'auditor', 'inspector'];
     const errores = [];
     rows.forEach((r, i) => {
       if (!r.legajo) errores.push(`Fila ${i + 2}: legajo vacío`);
@@ -4647,6 +4648,7 @@ const ModalAgregarUsuario = ({ t, onClose, onAdd }) => {
             <option value="supervisor">Supervisor</option>
             <option value="admin">Administrador</option>
             <option value="auditor">Auditor</option>
+            <option value="inspector">Inspector (Control de Calidad)</option>
           </select>
         </div>
         <div>
@@ -5711,6 +5713,7 @@ export default function App() {
       {user.rol === 'supervisor' && <VistaSupervisor key={refreshKey} t={t} currentUser={user} />}
       {user.rol === 'admin' && <VistaAdmin t={t} currentUser={user} />}
       {user.rol === 'auditor' && <VistaAuditor t={t} currentUser={user} />}
+      {user.rol === 'inspector' && <VistaControlCalidad t={t} currentUser={user} />}
     </div>
   );
 }
