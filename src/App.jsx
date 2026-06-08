@@ -5655,6 +5655,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [hora, setHora] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [inspectorTab, setInspectorTab] = useState('calidad'); // 'calidad' | 'supervisor' — solo para rol inspector
 
   useEffect(() => {
     if (!esModoPasillo) dataService.getCurrentUser().then(u => setUser(u));
@@ -5713,7 +5714,25 @@ export default function App() {
       {user.rol === 'supervisor' && <VistaSupervisor key={refreshKey} t={t} currentUser={user} />}
       {user.rol === 'admin' && <VistaAdmin t={t} currentUser={user} />}
       {user.rol === 'auditor' && <VistaAuditor t={t} currentUser={user} />}
-      {user.rol === 'inspector' && <VistaControlCalidad t={t} currentUser={user} />}
+      {user.rol === 'inspector' && (() => {
+        const tabBtn = (active) => ({
+          padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500,
+          fontFamily: 'Manrope',
+          background: active ? t.accent : t.surfaceHi,
+          color: active ? t.bg : t.textMuted,
+          border: `1px solid ${active ? t.accent : t.border}`,
+        });
+        return (
+          <>
+            <div style={{ display: 'flex', gap: 8, padding: '10px 20px', background: t.surface, borderBottom: `1px solid ${t.border}` }}>
+              <button style={tabBtn(inspectorTab === 'calidad')} onClick={() => setInspectorTab('calidad')}>Control de Calidad</button>
+              <button style={tabBtn(inspectorTab === 'supervisor')} onClick={() => setInspectorTab('supervisor')}>Supervisor</button>
+            </div>
+            {inspectorTab === 'calidad' && <VistaControlCalidad t={t} currentUser={user} />}
+            {inspectorTab === 'supervisor' && <VistaSupervisor key={refreshKey} t={t} currentUser={user} />}
+          </>
+        );
+      })()}
     </div>
   );
 }
