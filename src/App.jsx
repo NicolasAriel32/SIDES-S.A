@@ -14,6 +14,7 @@ import {
   ResponsiveContainer, LineChart, Line, ComposedChart, Cell
 } from 'recharts';
 import VistaControlCalidad from './VistaControlCalidad.jsx';
+import VistaRecontrol from './VistaRecontrol.jsx';
 
 
 /* =================================================================
@@ -5726,9 +5727,11 @@ export default function App() {
           <>
             <div style={{ display: 'flex', gap: 8, padding: '10px 20px', background: t.surface, borderBottom: `1px solid ${t.border}` }}>
               <button style={tabBtn(inspectorTab === 'calidad')} onClick={() => setInspectorTab('calidad')}>Control de Calidad</button>
+              <button style={tabBtn(inspectorTab === 'recontrol')} onClick={() => setInspectorTab('recontrol')}>Recontrol de rechazos</button>
               <button style={tabBtn(inspectorTab === 'supervisor')} onClick={() => setInspectorTab('supervisor')}>Supervisor</button>
             </div>
             {inspectorTab === 'calidad' && <VistaControlCalidad t={t} currentUser={user} />}
+            {inspectorTab === 'recontrol' && <VistaRecontrol t={t} currentUser={user} />}
             {inspectorTab === 'supervisor' && <VistaSupervisor key={refreshKey} t={t} currentUser={user} />}
           </>
         );

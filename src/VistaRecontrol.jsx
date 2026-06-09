@@ -1,0 +1,331 @@
+import React, { useState, useMemo } from 'react';
+import {
+  ArrowLeft, Save, Check, AlertTriangle,
+  PackageCheck, CheckCircle2, RotateCcw
+} from 'lucide-react';
+
+/* =================================================================
+   MÓDULO RECONTROL DE RECHAZOS
+   "Abrir una NC" = en planta es "rechazar / abrir un rechazo".
+   Un rechazo abierto por calidad cae acá para ser recontrolado.
+   Los datos del rechazo vienen automáticos (solo lectura); el
+   inspector completa la planilla. Recuperados = total − descartados.
+   Por ahora: datos de ejemplo en memoria (sin backend).
+   ================================================================= */
+
+const CABEZALES_POR_CAJA = 336;
+const KG_POR_CABEZAL = 0.0184;
+
+const INSPECTORES = ['García, Marcela','Pereyra, Luis','Romero, Ana','Díaz, Fabián'];
+const ACCIONES_PREVIAS = ['RETRABAJO','SELECCION','LIMPIEZA','OTRO'];
+const DEFECTOS_LISTA = [
+  'Marcado de gatillo desprolijo','Leve palanca hundida','Polvillo',
+  'Pico descolorido','Cabezal con golpe','Cierre de tapa deficiente',
+  'Válvula clavada','Encastre roto','Soldado de tubos','Precinto roto',
+  'Largo fuera de rango','Apertura fuera de rango','Inocuidad','Otro',
+];
+
+// ─── RECHAZOS DE EJEMPLO (los abre calidad → caen acá automáticamente) ────────
+const RECHAZOS_EJEMPLO = [
+  {
+    id:'r-0042', numero:42, estado:'PENDIENTE',
+    fecha_apertura:'07/06/2026 23:15', inspector_abrio:'Pereyra, Luis',
+    id_maquina:'MAQ-001', producto:'Sifón 1L Classic', lote:'25503', cliente:'SIDES',
+    caja_desde:'65', caja_hasta:'68', cantidad_rechazo:4,
+    defectos:['Pico descolorido'],
+    observacion:'Se encuentran (2) cabezales con pico descolorido (lote: 290).',
+  },
+  {
+    id:'r-0043', numero:43, estado:'PENDIENTE',
+    fecha_apertura:'07/06/2026 23:00', inspector_abrio:'Pereyra, Luis',
+    id_maquina:'MAQ-006', producto:'Sifón 1L Premium', lote:'25443', cliente:'SIDES',
+    caja_desde:'311', caja_hasta:'311', cantidad_rechazo:1,
+    defectos:['Largo fuera de rango'],
+    observacion:'Largo de cabezal fuera de rango. LO PESO 4.19.',
+  },
+];
+
+const RESULTADO_LBL = {
+  RECUPERADO_TOTAL:  { txt:'Recuperado total',  tone:'success' },
+  RECUPERADO_PARCIAL:{ txt:'Recuperado parcial',tone:'warn' },
+  RECHAZADO_TOTAL:   { txt:'Rechazado total',   tone:'danger' },
+};
+const calcResultado = (total, desc) => {
+  if (isNaN(total) || isNaN(desc) || total <= 0) return null;
+  if (desc === 0) return 'RECUPERADO_TOTAL';
+  if (desc >= total) return 'RECHAZADO_TOTAL';
+  return 'RECUPERADO_PARCIAL';
+};
+
+const emptyPlanilla = () => ({
+  inspector:'', accion_previa:'', descartados:'',
+  defectos:[], es_final:true, observaciones:'',
+});
+
+// ─── ESTILOS (tokens del sistema) ─────────────────────────────────────────────
+const mk = (t) => ({
+  root:{background:t.bg,color:t.text,fontFamily:"'Manrope',system-ui,sans-serif",fontSize:14},
+  toolbar:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 20px',background:t.surface,borderBottom:`1px solid ${t.border}`,gap:12,flexWrap:'wrap'},
+  toolbarTitle:{fontWeight:600,fontSize:15,color:t.text,fontFamily:"'Bricolage Grotesque',Manrope,sans-serif",display:'flex',alignItems:'center',gap:8},
+  btnVolver:{background:t.surface,color:t.accent,border:`1px solid ${t.accent}`,borderRadius:6,padding:'6px 12px',fontSize:12,cursor:'pointer',fontWeight:500,display:'inline-flex',alignItems:'center',gap:6,fontFamily:'Manrope'},
+  body:{padding:'20px 24px',maxWidth:980,margin:'0 auto'},
+
+  // lista
+  listaTit:{margin:'0 0 4px',fontSize:18,fontWeight:600,color:t.text,fontFamily:"'Bricolage Grotesque',Manrope,sans-serif"},
+  listaPie:{margin:'0 0 18px',fontSize:12,color:t.textMuted},
+  rechCard:{background:t.surface,border:`1px solid ${t.border}`,borderRadius:10,padding:'14px 16px',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'},
+  rechNum:{background:t.dangerSoft,color:t.danger,border:`1px solid ${t.danger}40`,borderRadius:6,padding:'4px 10px',fontSize:12,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"},
+  rechMeta:{fontSize:12,color:t.textMuted},
+  rechMetaStrong:{color:t.text,fontWeight:500},
+  btnRecontrolar:{background:t.accent,color:t.bg,border:'none',borderRadius:6,padding:'8px 14px',fontSize:12,fontWeight:600,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,fontFamily:'Manrope'},
+  hechoBadge:{background:t.successSoft,color:t.success,border:`1px solid ${t.success}40`,borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:600,display:'inline-flex',alignItems:'center',gap:5},
+
+  // planilla
+  card:{background:t.surface,border:`1px solid ${t.border}`,borderRadius:10,padding:18,marginBottom:14},
+  cardTit:{fontSize:12,fontWeight:600,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.08em',margin:'0 0 14px',fontFamily:"'JetBrains Mono',monospace",display:'flex',alignItems:'center',gap:8},
+  autoGrid:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'12px 18px'},
+  autoItem:{display:'flex',flexDirection:'column',gap:2},
+  autoLbl:{fontSize:10,color:t.textDim,textTransform:'uppercase',letterSpacing:'0.04em'},
+  autoVal:{fontSize:13,color:t.text,fontWeight:500},
+
+  campo:{marginBottom:16},
+  label:{display:'block',fontSize:12,color:t.textMuted,marginBottom:6,fontWeight:500},
+  req:{color:t.danger},
+  input:{width:'100%',background:t.surfaceHi,border:`1px solid ${t.border}`,borderRadius:6,color:t.text,padding:'10px 12px',fontSize:14,boxSizing:'border-box',outline:'none',fontFamily:'Manrope'},
+  select:{width:'100%',background:t.surfaceHi,border:`1px solid ${t.border}`,borderRadius:6,color:t.text,padding:'10px 12px',fontSize:14,boxSizing:'border-box',outline:'none',fontFamily:'Manrope'},
+  textarea:{width:'100%',background:t.surfaceHi,border:`1px solid ${t.border}`,borderRadius:6,color:t.text,padding:'10px 12px',fontSize:14,boxSizing:'border-box',resize:'vertical',outline:'none',fontFamily:'Manrope'},
+  chipGrid:{display:'flex',flexWrap:'wrap',gap:6},
+  chip:{background:t.surfaceHi,border:`1px solid ${t.border}`,color:t.textMuted,borderRadius:6,padding:'6px 12px',fontSize:12,cursor:'pointer',fontWeight:500,fontFamily:'Manrope'},
+  chipOn:{background:t.accentSoft,border:`1px solid ${t.accent}`,color:t.accent},
+  chipDef:{background:t.dangerSoft,border:`1px solid ${t.danger}`,color:t.danger},
+
+  calcBox:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginTop:6},
+  calcItem:{background:t.surfaceHi,borderRadius:8,padding:'12px 14px',textAlign:'center'},
+  calcNum:{display:'block',fontSize:22,fontWeight:700,lineHeight:1.1},
+  calcLbl:{display:'block',fontSize:10,color:t.textDim,textTransform:'uppercase',marginTop:4,letterSpacing:'0.04em'},
+  pill:{display:'inline-flex',alignItems:'center',gap:6,borderRadius:6,padding:'4px 10px',fontSize:12,fontWeight:600},
+
+  alerta:{marginTop:8,padding:'8px 12px',background:t.warnSoft,border:`1px solid ${t.warn}`,borderRadius:6,display:'flex',alignItems:'flex-start',gap:8,fontSize:12,color:t.warn},
+  toggleRow:{display:'flex',alignItems:'center',gap:10},
+  toggle:{width:42,height:24,borderRadius:999,padding:2,cursor:'pointer',transition:'background .15s'},
+  toggleKnob:{width:20,height:20,borderRadius:'50%',background:'#fff',transition:'transform .15s'},
+  btnGuardar:{width:'100%',background:t.accent,color:t.bg,border:'none',borderRadius:8,padding:'14px',fontSize:15,fontWeight:600,cursor:'pointer',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:8,fontFamily:'Manrope'},
+  btnDis:{background:t.surfaceHi,color:t.textDim,cursor:'not-allowed'},
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function VistaRecontrol({ t }) {
+  const S = useMemo(()=>mk(t),[t]);
+  const [rechazos, setRechazos] = useState(RECHAZOS_EJEMPLO);
+  const [activoId, setActivoId] = useState(null);
+  const [form, setForm] = useState(emptyPlanilla());
+  const [guardado, setGuardado] = useState(false);
+
+  const tone = (name) => ({success:t.success,warn:t.warn,danger:t.danger}[name] || t.textMuted);
+  const toneSoft = (name) => ({success:t.successSoft,warn:t.warnSoft,danger:t.dangerSoft}[name] || t.surfaceHi);
+
+  const pendientes = rechazos.filter(r=>r.estado==='PENDIENTE');
+  const hechos      = rechazos.filter(r=>r.estado==='RECONTROLADO');
+  const activo      = rechazos.find(r=>r.id===activoId) || null;
+
+  const abrir = (r) => {
+    setActivoId(r.id);
+    setForm(emptyPlanilla());
+    setGuardado(false);
+  };
+  const hF = (k,v) => setForm(f=>({...f,[k]:v}));
+  const toggleDef = d => setForm(f=>({...f,defectos:f.defectos.includes(d)?f.defectos.filter(x=>x!==d):[...f.defectos,d]}));
+
+  // Total automático: cajas rechazadas × cabezales por caja (336 por defecto,
+  // a futuro según la medida del producto). El inspector solo carga las malas.
+  const total = activo ? activo.cantidad_rechazo * CABEZALES_POR_CAJA : 0;
+  const desc  = parseInt(form.descartados);
+  const recuperados = (total>0 && !isNaN(desc)) ? total-desc : null;
+  const merma = !isNaN(desc) ? desc*KG_POR_CABEZAL : null;
+  const resultado = calcResultado(total, desc);
+  const excede = total>0 && !isNaN(desc) && desc>total;
+
+  const formValido = form.inspector && form.accion_previa
+    && total>0 && !isNaN(desc) && desc>=0 && !excede;
+
+  const guardar = () => {
+    if(!formValido||!activo) return;
+    setRechazos(rs=>rs.map(r=>r.id===activo.id?{...r,estado:'RECONTROLADO',_resultado:resultado,_merma:merma,_descartados:desc,_recuperados:recuperados}:r));
+    setGuardado(true);
+    setTimeout(()=>{ setActivoId(null); setGuardado(false); },1100);
+  };
+
+  // ── LISTA ───────────────────────────────────────────────────────────────────
+  if (!activo) {
+    return (
+      <div style={S.root}>
+        <div style={S.toolbar}>
+          <span style={S.toolbarTitle}><RotateCcw size={16} color={t.accent}/> Recontrol de rechazos</span>
+          <span style={{fontSize:12,color:t.textMuted}}>{pendientes.length} pendiente{pendientes.length!==1?'s':''}</span>
+        </div>
+        <div style={S.body}>
+          <h2 style={S.listaTit}>Rechazos pendientes de recontrol</h2>
+          <p style={S.listaPie}>Cada rechazo abierto por calidad cae acá. Tocá “Recontrolar” para completar la planilla.</p>
+
+          {pendientes.length===0 && (
+            <div style={{textAlign:'center',padding:'50px 0',color:t.textDim}}>
+              <CheckCircle2 size={32} color={t.success}/>
+              <p style={{margin:'12px 0 0'}}>No hay rechazos pendientes.</p>
+            </div>
+          )}
+
+          {pendientes.map(r=>(
+            <div key={r.id} style={S.rechCard}>
+              <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                <span style={S.rechNum}>RECHAZO #{r.numero}</span>
+                <div>
+                  <div style={{fontSize:13,color:t.text,fontWeight:500}}>{r.id_maquina} · {r.producto}</div>
+                  <div style={S.rechMeta}>Lote <span style={S.rechMetaStrong}>{r.lote}</span> · cajas {r.caja_desde}–{r.caja_hasta} ({r.cantidad_rechazo}) · <span style={{color:t.danger}}>{r.defectos.join(', ')}</span></div>
+                  <div style={{...S.rechMeta,marginTop:2}}>Abierto por {r.inspector_abrio} · {r.fecha_apertura}</div>
+                </div>
+              </div>
+              <button style={S.btnRecontrolar} onClick={()=>abrir(r)}>Recontrolar <ArrowLeft size={14} style={{transform:'rotate(180deg)'}}/></button>
+            </div>
+          ))}
+
+          {hechos.length>0 && (
+            <div style={{marginTop:22}}>
+              <p style={{...S.listaPie,marginBottom:10,fontWeight:500,color:t.textMuted}}>Recontrolados en esta sesión</p>
+              {hechos.map(r=>{
+                const lbl=RESULTADO_LBL[r._resultado];
+                return(
+                  <div key={r.id} style={{...S.rechCard,opacity:0.85}}>
+                    <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                      <span style={{...S.rechNum,background:t.surfaceHi,color:t.textMuted,borderColor:t.border}}>RECHAZO #{r.numero}</span>
+                      <div style={{fontSize:13,color:t.textMuted}}>{r.id_maquina} · {r.producto} · lote {r.lote}</div>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                      <span style={{fontSize:11,color:t.textDim}}>desc. {r._descartados} · merma {r._merma.toFixed(3)} kg</span>
+                      {lbl && <span style={{...S.pill,background:toneSoft(lbl.tone),color:tone(lbl.tone),border:`1px solid ${tone(lbl.tone)}40`}}>{lbl.txt}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── PLANILLA ────────────────────────────────────────────────────────────────
+  const lbl = resultado ? RESULTADO_LBL[resultado] : null;
+  return (
+    <div style={S.root}>
+      <div style={S.toolbar}>
+        <button style={S.btnVolver} onClick={()=>setActivoId(null)}><ArrowLeft size={14}/> Volver a la cola</button>
+        <span style={S.toolbarTitle}><RotateCcw size={16} color={t.accent}/> Recontrol · RECHAZO #{activo.numero}</span>
+        <span/>
+      </div>
+
+      <div style={S.body}>
+        {/* Datos automáticos del rechazo */}
+        <div style={S.card}>
+          <p style={S.cardTit}><AlertTriangle size={14}/> Datos del rechazo (automático)</p>
+          <div style={S.autoGrid}>
+            <div style={S.autoItem}><span style={S.autoLbl}>N° de rechazo</span><span style={S.autoVal}>#{activo.numero}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Máquina</span><span style={S.autoVal}>{activo.id_maquina}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Producto</span><span style={S.autoVal}>{activo.producto}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Lote</span><span style={S.autoVal}>{activo.lote}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Cliente</span><span style={S.autoVal}>{activo.cliente}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Cajas rechazadas</span><span style={S.autoVal}>{activo.caja_desde}–{activo.caja_hasta} ({activo.cantidad_rechazo} cajas)</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Defecto detectado</span><span style={{...S.autoVal,color:t.danger}}>{activo.defectos.join(', ')}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Abierto por</span><span style={S.autoVal}>{activo.inspector_abrio}</span></div>
+            <div style={S.autoItem}><span style={S.autoLbl}>Fecha apertura</span><span style={S.autoVal}>{activo.fecha_apertura}</span></div>
+          </div>
+          {activo.observacion && <div style={{marginTop:12,padding:'8px 12px',background:t.surfaceHi,borderRadius:6,fontSize:12,color:t.textMuted}}>“{activo.observacion}”</div>}
+        </div>
+
+        {/* Planilla de recontrol */}
+        <div style={S.card}>
+          <p style={S.cardTit}><PackageCheck size={14}/> Planilla de recontrol</p>
+
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 16px'}}>
+            <div style={S.campo}>
+              <label style={S.label}>Inspector de turno <span style={S.req}>*</span></label>
+              <select style={S.select} value={form.inspector} onChange={e=>hF('inspector',e.target.value)}>
+                <option value="">Seleccionar…</option>
+                {INSPECTORES.map(i=><option key={i}>{i}</option>)}
+              </select>
+            </div>
+            <div style={S.campo}>
+              <label style={S.label}>Acción previa <span style={S.req}>*</span></label>
+              <select style={S.select} value={form.accion_previa} onChange={e=>hF('accion_previa',e.target.value)}>
+                <option value="">Seleccionar…</option>
+                {ACCIONES_PREVIAS.map(a=><option key={a}>{a}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{...S.campo,padding:'10px 12px',background:t.surfaceHi,borderRadius:6,marginBottom:14}}>
+            <span style={{fontSize:12,color:t.textMuted}}>Total a recontrolar (automático): </span>
+            <span style={{fontSize:14,fontWeight:600,color:t.text}}>{total} cabezales</span>
+            <span style={{fontSize:11,color:t.textDim}}> = {activo.cantidad_rechazo} caja(s) × {CABEZALES_POR_CAJA} cab.</span>
+          </div>
+          <div style={S.campo}>
+            <label style={S.label}>Descartados — solo las malas (van a merma y se reponen) <span style={S.req}>*</span></label>
+            <input style={{...S.input,...(excede?{borderColor:t.warn,background:t.warnSoft}:{})}} type="number" min="0" placeholder="0" value={form.descartados} onChange={e=>hF('descartados',e.target.value)}/>
+          </div>
+
+          {excede && (
+            <div style={S.alerta}><AlertTriangle size={14}/><span>No podés descartar más de lo reinspeccionado ({total}).</span></div>
+          )}
+
+          {/* Cálculo en vivo */}
+          <div style={S.calcBox}>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.text}}>{total||'—'}</span>
+              <span style={S.calcLbl}>Total</span>
+            </div>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.success}}>{recuperados!=null&&recuperados>=0?recuperados:'—'}</span>
+              <span style={S.calcLbl}>Recuperados (buenos)</span>
+            </div>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.danger}}>{!isNaN(desc)?desc:'—'}</span>
+              <span style={S.calcLbl}>Descartados = repuestos</span>
+            </div>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.warn}}>{merma!=null?merma.toFixed(3):'—'}</span>
+              <span style={S.calcLbl}>Merma (kg)</span>
+            </div>
+            <div style={{...S.calcItem,display:'flex',flexDirection:'column',justifyContent:'center',alignItems:'center'}}>
+              {lbl ? <span style={{...S.pill,background:toneSoft(lbl.tone),color:tone(lbl.tone),border:`1px solid ${tone(lbl.tone)}40`}}>{lbl.txt}</span> : <span style={{color:t.textDim,fontSize:13}}>—</span>}
+              <span style={{...S.calcLbl,marginTop:6}}>Resultado (auto)</span>
+            </div>
+          </div>
+
+          <div style={{...S.campo,marginTop:18}}>
+            <label style={S.label}>Defectos que persisten (los que se descartaron)</label>
+            <div style={S.chipGrid}>
+              {DEFECTOS_LISTA.map(d=>(
+                <button key={d} style={{...S.chip,...(form.defectos.includes(d)?S.chipDef:{})}} onClick={()=>toggleDef(d)}>{d}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={S.campo}>
+            <label style={S.label}>Observaciones</label>
+            <textarea style={S.textarea} rows={2} placeholder="Ej: se seleccionaron a mano, 2 con pico descolorido a merma…" value={form.observaciones} onChange={e=>hF('observaciones',e.target.value)}/>
+          </div>
+
+          <div style={{...S.campo,...S.toggleRow}}>
+            <div style={{...S.toggle,background:form.es_final?t.accent:t.border}} onClick={()=>hF('es_final',!form.es_final)}>
+              <div style={{...S.toggleKnob,transform:form.es_final?'translateX(18px)':'translateX(0)'}}/>
+            </div>
+            <span style={{fontSize:13,color:t.text}}>Es el recontrol definitivo de este rechazo</span>
+          </div>
+
+          <button style={{...S.btnGuardar,...(!formValido?S.btnDis:{}),...(guardado?{background:t.success}:{})}} onClick={guardar} disabled={!formValido}>
+            {guardado ? <><Check size={16}/> Recontrol guardado</> : <><Save size={16}/> Guardar recontrol</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
