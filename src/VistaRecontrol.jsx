@@ -1,49 +1,26 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Save, Check, AlertTriangle,
-  PackageCheck, CheckCircle2, RotateCcw
+  PackageCheck, CheckCircle2, RotateCcw, Loader2
 } from 'lucide-react';
+import {
+  fetchCatalogos, fetchRechazosPendientes, fetchRecontrolesDelDia,
+  guardarRecontrol as apiGuardarRecontrol,
+} from './api/calidad.js';
 
 /* =================================================================
    MÓDULO RECONTROL DE RECHAZOS
    "Abrir una NC" = en planta es "rechazar / abrir un rechazo".
-   Un rechazo abierto por calidad cae acá para ser recontrolado.
-   Los datos del rechazo vienen automáticos (solo lectura); el
-   inspector completa la planilla. Recuperados = total − descartados.
-   Por ahora: datos de ejemplo en memoria (sin backend).
+   Conectado a Supabase: la cola sale de no_conformidades
+   (estado ABIERTA / EN ANALISIS, origen control de calidad) y el
+   guardado usa la RPC guardar_recontrol (recontrol + defectos +
+   cierre/avance de la NC). Recuperados = total − descartados.
    ================================================================= */
 
 const CABEZALES_POR_CAJA = 336;
 const KG_POR_CABEZAL = 0.0184;
 
-const INSPECTORES = ['García, Marcela','Pereyra, Luis','Romero, Ana','Díaz, Fabián'];
 const ACCIONES_PREVIAS = ['RETRABAJO','SELECCION','LIMPIEZA','OTRO'];
-const DEFECTOS_LISTA = [
-  'Marcado de gatillo desprolijo','Leve palanca hundida','Polvillo',
-  'Pico descolorido','Cabezal con golpe','Cierre de tapa deficiente',
-  'Válvula clavada','Encastre roto','Soldado de tubos','Precinto roto',
-  'Largo fuera de rango','Apertura fuera de rango','Inocuidad','Otro',
-];
-
-// ─── RECHAZOS DE EJEMPLO (los abre calidad → caen acá automáticamente) ────────
-const RECHAZOS_EJEMPLO = [
-  {
-    id:'r-0042', numero:42, estado:'PENDIENTE',
-    fecha_apertura:'07/06/2026 23:15', inspector_abrio:'Pereyra, Luis',
-    id_maquina:'MAQ-001', producto:'Sifón 1L Classic', lote:'25503', cliente:'SIDES',
-    caja_desde:'65', caja_hasta:'68', cantidad_rechazo:4,
-    defectos:['Pico descolorido'],
-    observacion:'Se encuentran (2) cabezales con pico descolorido (lote: 290).',
-  },
-  {
-    id:'r-0043', numero:43, estado:'PENDIENTE',
-    fecha_apertura:'07/06/2026 23:00', inspector_abrio:'Pereyra, Luis',
-    id_maquina:'MAQ-006', producto:'Sifón 1L Premium', lote:'25443', cliente:'SIDES',
-    caja_desde:'311', caja_hasta:'311', cantidad_rechazo:1,
-    defectos:['Largo fuera de rango'],
-    observacion:'Largo de cabezal fuera de rango. LO PESO 4.19.',
-  },
-];
 
 const RESULTADO_LBL = {
   RECUPERADO_TOTAL:  { txt:'Recuperado total',  tone:'success' },
@@ -114,24 +91,45 @@ const mk = (t) => ({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function VistaRecontrol({ t }) {
+export default function VistaRecontrol({ t, currentUser }) {
   const S = useMemo(()=>mk(t),[t]);
-  const [rechazos, setRechazos] = useState(RECHAZOS_EJEMPLO);
+  const [pendientes, setPendientes] = useState([]);
+  const [hechos, setHechos] = useState([]);
+  const [defectosCat, setDefectosCat] = useState([]);
+  const [inspectoresCat, setInspectoresCat] = useState([]);
   const [activoId, setActivoId] = useState(null);
   const [form, setForm] = useState(emptyPlanilla());
   const [guardado, setGuardado] = useState(false);
+  const [cargando, setCargando] = useState(true);
+  const [errorCarga, setErrorCarga] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+  const [errorOp, setErrorOp] = useState(null);
+
+  const cargar = useCallback(async ()=>{
+    setCargando(true); setErrorCarga(null);
+    try {
+      const [cat, pend, rec] = await Promise.all([
+        fetchCatalogos(), fetchRechazosPendientes(), fetchRecontrolesDelDia(),
+      ]);
+      setDefectosCat(cat.defectos);
+      setInspectoresCat(cat.inspectores);
+      setPendientes(pend);
+      setHechos(rec);
+    } catch(e){ setErrorCarga(e.message); }
+    finally { setCargando(false); }
+  },[]);
+  useEffect(()=>{ cargar(); },[cargar]);
 
   const tone = (name) => ({success:t.success,warn:t.warn,danger:t.danger}[name] || t.textMuted);
   const toneSoft = (name) => ({success:t.successSoft,warn:t.warnSoft,danger:t.dangerSoft}[name] || t.surfaceHi);
 
-  const pendientes = rechazos.filter(r=>r.estado==='PENDIENTE');
-  const hechos      = rechazos.filter(r=>r.estado==='RECONTROLADO');
-  const activo      = rechazos.find(r=>r.id===activoId) || null;
+  const activo = pendientes.find(r=>r.id===activoId) || null;
 
   const abrir = (r) => {
     setActivoId(r.id);
     setForm(emptyPlanilla());
     setGuardado(false);
+    setErrorOp(null);
   };
   const hF = (k,v) => setForm(f=>({...f,[k]:v}));
   const toggleDef = d => setForm(f=>({...f,defectos:f.defectos.includes(d)?f.defectos.filter(x=>x!==d):[...f.defectos,d]}));
@@ -146,14 +144,49 @@ export default function VistaRecontrol({ t }) {
   const excede = total>0 && !isNaN(desc) && desc>total;
 
   const formValido = form.inspector && form.accion_previa
-    && total>0 && !isNaN(desc) && desc>=0 && !excede;
+    && total>0 && !isNaN(desc) && desc>=0 && !excede && !guardando;
 
-  const guardar = () => {
+  const guardar = async () => {
     if(!formValido||!activo) return;
-    setRechazos(rs=>rs.map(r=>r.id===activo.id?{...r,estado:'RECONTROLADO',_resultado:resultado,_merma:merma,_descartados:desc,_recuperados:recuperados}:r));
-    setGuardado(true);
-    setTimeout(()=>{ setActivoId(null); setGuardado(false); },1100);
+    setErrorOp(null); setGuardando(true);
+    try {
+      const insp = inspectoresCat.find(i=>i.legajo===form.inspector);
+      await apiGuardarRecontrol({
+        noConformidadId: activo.id,
+        controlCalidadId: activo.control_calidad_id,
+        inspector: insp,
+        accionPrevia: form.accion_previa,
+        reinspeccionados: total,
+        descartados: desc,
+        resultado,
+        kgMerma: merma,
+        esFinal: form.es_final,
+        observaciones: form.observaciones,
+        defectosIds: form.defectos,
+      });
+      setGuardado(true);
+      setTimeout(async ()=>{
+        setActivoId(null); setGuardado(false);
+        await cargar();           // refresca cola y recontrolados desde la DB
+      },1100);
+    } catch(e){ setErrorOp(e.message); setGuardando(false); return; }
+    setGuardando(false);
   };
+
+  // ── CARGA / ERROR ───────────────────────────────────────────────────────────
+  if (cargando) return (
+    <div style={{...S.root,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'50vh'}}>
+      <Loader2 size={28} color={t.accent}/>
+      <p style={{color:t.textMuted,fontSize:13,marginTop:12}}>Cargando recontrol…</p>
+    </div>
+  );
+  if (errorCarga) return (
+    <div style={{...S.root,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'50vh',padding:24}}>
+      <AlertTriangle size={28} color={t.danger}/>
+      <p style={{color:t.danger,fontSize:13,margin:'12px 0',textAlign:'center'}}>{errorCarga}</p>
+      <button style={S.btnVolver} onClick={cargar}><RotateCcw size={14}/> Reintentar</button>
+    </div>
+  );
 
   // ── LISTA ───────────────────────────────────────────────────────────────────
   if (!activo) {
@@ -250,7 +283,7 @@ export default function VistaRecontrol({ t }) {
               <label style={S.label}>Inspector de turno <span style={S.req}>*</span></label>
               <select style={S.select} value={form.inspector} onChange={e=>hF('inspector',e.target.value)}>
                 <option value="">Seleccionar…</option>
-                {INSPECTORES.map(i=><option key={i}>{i}</option>)}
+                {inspectoresCat.map(i=><option key={i.legajo} value={i.legajo}>{i.nombre} ({i.legajo})</option>)}
               </select>
             </div>
             <div style={S.campo}>
@@ -303,8 +336,8 @@ export default function VistaRecontrol({ t }) {
           <div style={{...S.campo,marginTop:18}}>
             <label style={S.label}>Defectos que persisten (los que se descartaron)</label>
             <div style={S.chipGrid}>
-              {DEFECTOS_LISTA.map(d=>(
-                <button key={d} style={{...S.chip,...(form.defectos.includes(d)?S.chipDef:{})}} onClick={()=>toggleDef(d)}>{d}</button>
+              {defectosCat.map(d=>(
+                <button key={d.id} style={{...S.chip,...(form.defectos.includes(d.id)?S.chipDef:{})}} onClick={()=>toggleDef(d.id)}>{d.nombre}</button>
               ))}
             </div>
           </div>
@@ -321,8 +354,13 @@ export default function VistaRecontrol({ t }) {
             <span style={{fontSize:13,color:t.text}}>Es el recontrol definitivo de este rechazo</span>
           </div>
 
+          {errorOp && (
+            <div style={{...S.alerta,background:t.dangerSoft,border:`1px solid ${t.danger}`,color:t.danger,marginBottom:10}}>
+              <AlertTriangle size={14}/><span>{errorOp}</span>
+            </div>
+          )}
           <button style={{...S.btnGuardar,...(!formValido?S.btnDis:{}),...(guardado?{background:t.success}:{})}} onClick={guardar} disabled={!formValido}>
-            {guardado ? <><Check size={16}/> Recontrol guardado</> : <><Save size={16}/> Guardar recontrol</>}
+            {guardando ? <><Loader2 size={16}/> Guardando…</> : guardado ? <><Check size={16}/> Recontrol guardado</> : <><Save size={16}/> Guardar recontrol</>}
           </button>
         </div>
       </div>

@@ -1,51 +1,30 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Box, AlertTriangle, ClipboardList, Settings, ArrowLeft, Save,
-  Check, CheckCircle2, RotateCcw, History, X, Ruler
+  Check, CheckCircle2, RotateCcw, History, X, Ruler, Loader2
 } from 'lucide-react';
+import {
+  fetchCatalogos, fetchSesionAbierta, crearSesion, actualizarSesion,
+  fetchOrdenesActivas, cambiarOrden as apiCambiarOrden,
+  fetchControlesDelDia, guardarControl as apiGuardarControl,
+} from './api/calidad.js';
 
 /* =================================================================
    MÓDULO CONTROL DE CALIDAD (dimensional / visual)
-   Integrado al sistema de Trazabilidad — re-estilizado con tokens `t`.
-   Por ahora usa datos en memoria (mock). El cableado a Supabase
-   (especifc_producto, controles_calidad, mediciones, controles_defectos,
-   inspectores_calidad) se hace en una etapa posterior.
+   Conectado a Supabase: especifc_producto, inspectores_calidad,
+   tipos_falla, sesiones_calidad, ordenes_maquina y RPC
+   guardar_control_calidad (control + mediciones + defectos + NC).
    ================================================================= */
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 const APERTURA_MIN = 800;
 const APERTURA_MAX = 1800;
 
-const MAQUINAS_LIST = [
-  'MAQ-001','MAQ-002','MAQ-006','MAQ-007','MAQ-008',
-  'MAQ-009','MAQ-010','MAQ-011','MAQ-012','MAQ-013'
-];
-
-const PRODUCTOS = {
-  'Sifón 1L Classic':  { largo_min: 145.0, largo_max: 149.0, largo_nom: 147 },
-  'Sifón 1L Premium':  { largo_min: 146.0, largo_max: 150.0, largo_nom: 148 },
-  'Sifón 750ml':       { largo_min: 130.0, largo_max: 134.0, largo_nom: 132 },
-  'Recarga CO2 std':   { largo_min: 120.0, largo_max: 124.0, largo_nom: 122 },
-  'Recarga CO2 plus':  { largo_min: 122.0, largo_max: 126.0, largo_nom: 124 },
-};
-
 const CLIENTES = ['Supermercados Norte','Distribuidora Sur','Horeca BA','Exportación Chile','Stock propio','SIDES'];
-const DEFECTOS_LISTA = [
-  'Marcado de gatillo desprolijo','Leve palanca hundida','Polvillo',
-  'Pico descolorido','Cabezal con golpe','Cierre de tapa deficiente',
-  'Válvula clavada','Encastre roto','Soldado de tubos','Precinto roto',
-  'Largo fuera de rango','Apertura fuera de rango','Inocuidad','Otro',
-];
 const TURNOS = [
   { id:'M', label:'Mañana' },
   { id:'T', label:'Tarde'  },
   { id:'N', label:'Noche'  },
-];
-const INSPECTORES = [
-  { legajo:'CAL1', nombre:'García, Marcela' },
-  { legajo:'CAL2', nombre:'Pereyra, Luis' },
-  { legajo:'CAL3', nombre:'Romero, Ana' },
-  { legajo:'CAL4', nombre:'Díaz, Fabián' },
 ];
 
 // 4 colores por inspector, derivados de los tokens del sistema (claro/oscuro)
@@ -59,61 +38,43 @@ const colInsp = (t) => [
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const nowTime  = () => new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
 const fueraApertura = v => { const n=parseFloat(v); return !isNaN(n)&&(n<APERTURA_MIN||n>APERTURA_MAX); };
-const fueraLargo = (v,prod) => {
-  if (!prod||!PRODUCTOS[prod]) return false;
-  const n=parseFloat(v); const {largo_min,largo_max}=PRODUCTOS[prod];
-  return !isNaN(n)&&(n<largo_min||n>largo_max);
+// lim = { largo_min, largo_max } del catálogo de productos (especifc_producto)
+const fueraLargo = (v,lim) => {
+  if (!lim) return false;
+  const n=parseFloat(v);
+  return !isNaN(n)&&(n<lim.largo_min||n>lim.largo_max);
 };
-const ordenVacia = id => ({ id_maquina:id, producto:'', lote:'', cliente:'', orden_id:'', activa:false, registros:[], ordenes_historial:[] });
+const ordenVacia = id => ({ id_maquina:id, producto:'', lote:'', cliente:'', orden_id:'', orden_maquina_id:null, especifc_producto_id:null, activa:false, registros:[], ordenes_historial:[] });
 const emptyForm = () => ({
   nro_caja:'', apertura_tapa:['','','',''], largo_cabezal:['','','',''],
   no_conforme:'No', defectos:[], observacion_libre:'',
   cantidad_rechazo:'', caja_desde:'', caja_hasta:'', hora:nowTime(),
 });
-
-// ─── DATOS DE EJEMPLO (mock en memoria) ───────────────────────────────────────
-const SESION_EJEMPLO = {
-  id:'SES-20260607-2031', fecha:'07/06/2026', turno:'N',
-  inspectores:[
-    { legajo:'CAL2', nombre:'Pereyra, Luis', maquinas:['MAQ-001','MAQ-002','MAQ-006','MAQ-007','MAQ-008'] },
-    { legajo:'CAL3', nombre:'Romero, Ana',   maquinas:['MAQ-009','MAQ-010','MAQ-011','MAQ-012','MAQ-013'] },
-  ],
-};
-const MAQUINAS_EJEMPLO = MAQUINAS_LIST.map(id => {
-  if (id === 'MAQ-001') return {
-    id_maquina:id, producto:'Sifón 1L Classic', lote:'25503', cliente:'SIDES', orden_id:'OP-2026-0481', activa:true, ordenes_historial:[],
-    registros:[
-      { id_reg:'MAQ-001-R001', id_maquina:'MAQ-001', nro_caja:'68', hora:'20:15', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25503', producto:'Sifón 1L Classic', cliente:'SIDES', orden_id:'OP-2026-0481', inspector_legajo:'CAL2', inspector_nombre:'Pereyra, Luis', apertura_tapa:['1050','980','1120','1010'], largo_cabezal:['147.2','147.0','147.5','146.8'], no_conforme:'Sí', defectos:['Pico descolorido'], observacion_libre:'Se encuentran (2) cabezales con pico descolorido (lote: 290)', cantidad_rechazo:'4', caja_desde:'65', caja_hasta:'68', alertas_ap:[false,false,false,false], alertas_lg:[false,false,false,false], timestamp:'2026-06-07T23:15:00.000Z' },
-      { id_reg:'MAQ-001-R002', id_maquina:'MAQ-001', nro_caja:'74', hora:'21:10', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25503', producto:'Sifón 1L Classic', cliente:'SIDES', orden_id:'OP-2026-0481', inspector_legajo:'CAL2', inspector_nombre:'Pereyra, Luis', apertura_tapa:['1100','1050','1080','1090'], largo_cabezal:['147.1','146.9','147.3','147.0'], no_conforme:'No', defectos:[], observacion_libre:'', cantidad_rechazo:'', caja_desde:'', caja_hasta:'', alertas_ap:[false,false,false,false], alertas_lg:[false,false,false,false], timestamp:'2026-06-07T00:10:00.000Z' },
-    ],
-  };
-  if (id === 'MAQ-002') return {
-    id_maquina:id, producto:'Sifón 1L Classic', lote:'25496', cliente:'Distribuidora Sur', orden_id:'OP-2026-0477', activa:true,
-    ordenes_historial:[
-      { id_maquina:'MAQ-002', producto:'Sifón 750ml', lote:'25201', cliente:'Stock propio', orden_id:'OP-2026-0460', activa:true, cerrada_en:'19:45',
-        registros:[
-          { id_reg:'MAQ-002-OLD-R001', id_maquina:'MAQ-002', nro_caja:'177', hora:'18:30', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25201', producto:'Sifón 750ml', cliente:'Stock propio', orden_id:'OP-2026-0460', inspector_legajo:'CAL2', inspector_nombre:'Pereyra, Luis', apertura_tapa:['1050','1000','1080','1020'], largo_cabezal:['131.5','131.8','132.0','131.6'], no_conforme:'Sí', defectos:['Marcado de gatillo desprolijo','Leve palanca hundida','Polvillo'], observacion_libre:'Marcado de gatillo desprolijo, leve palanca hundida y leve polvillo.', cantidad_rechazo:'3', caja_desde:'175', caja_hasta:'177', alertas_ap:[false,false,false,false], alertas_lg:[false,false,false,false], timestamp:'2026-06-07T21:30:00.000Z' },
-        ]
-      }
-    ],
-    registros:[
-      { id_reg:'MAQ-002-R001', id_maquina:'MAQ-002', nro_caja:'102', hora:'20:30', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25496', producto:'Sifón 1L Classic', cliente:'Distribuidora Sur', orden_id:'OP-2026-0477', inspector_legajo:'CAL2', inspector_nombre:'Pereyra, Luis', apertura_tapa:['1100','1050','1080','1070'], largo_cabezal:['146.8','147.1','146.9','147.2'], no_conforme:'Sí', defectos:['Polvillo'], observacion_libre:'leve polvillo y leve telaraña. (1) Cabezal con golpe en pico.', cantidad_rechazo:'1', caja_desde:'102', caja_hasta:'102', alertas_ap:[false,false,false,false], alertas_lg:[false,false,false,false], timestamp:'2026-06-07T23:30:00.000Z' },
-    ],
-  };
-  if (id === 'MAQ-006') return {
-    id_maquina:id, producto:'Sifón 1L Premium', lote:'25443', cliente:'SIDES', orden_id:'OP-2026-0482', activa:true, ordenes_historial:[],
-    registros:[
-      { id_reg:'MAQ-006-R001', id_maquina:'MAQ-006', nro_caja:'311', hora:'20:00', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25443', producto:'Sifón 1L Premium', cliente:'SIDES', orden_id:'OP-2026-0482', inspector_legajo:'CAL2', inspector_nombre:'Pereyra, Luis', apertura_tapa:['1050','1100','1080','1060'], largo_cabezal:['150.8','150.5','150.9','151.0'], no_conforme:'Sí', defectos:['Largo fuera de rango'], observacion_libre:'LO PESO 4.19', cantidad_rechazo:'1', caja_desde:'311', caja_hasta:'311', alertas_ap:[false,false,false,false], alertas_lg:[true,true,true,true], timestamp:'2026-06-07T23:00:00.000Z' },
-    ],
-  };
-  if (id === 'MAQ-009') return {
-    id_maquina:id, producto:'Recarga CO2 std', lote:'25489', cliente:'Horeca BA', orden_id:'OP-2026-0479', activa:true, ordenes_historial:[],
-    registros:[
-      { id_reg:'MAQ-009-R001', id_maquina:'MAQ-009', nro_caja:'74', hora:'20:45', fecha:'07/06/2026', turno:'N', sesion_id:'SES-20260607-2031', lote:'25489', producto:'Recarga CO2 std', cliente:'Horeca BA', orden_id:'OP-2026-0479', inspector_legajo:'CAL3', inspector_nombre:'Romero, Ana', apertura_tapa:['1000','1050','1020','980'], largo_cabezal:['122.1','122.0','121.8','122.3'], no_conforme:'Sí', defectos:['Otro'], observacion_libre:'PN PASA JUSTO SE DA NOTIFICACION', cantidad_rechazo:'1', caja_desde:'74', caja_hasta:'74', alertas_ap:[false,false,false,false], alertas_lg:[false,false,false,false], timestamp:'2026-06-07T23:45:00.000Z' },
-    ],
-  };
-  return ordenVacia(id);
+const sesionNueva = () => ({
+  uuid:null, id:'(sin iniciar)',
+  fecha:new Date().toLocaleDateString('es-AR'),
+  turno:'', inspectores:[],
 });
+/** Arma el estado de máquinas combinando catálogo + órdenes activas + controles del día. */
+const armarMaquinas = (idsMaquinas, ordenesActivas, controles) =>
+  idsMaquinas.map(id => {
+    const o = ordenesActivas[id];
+    const propios = controles.filter(c => c.id_maquina === id);
+    const regs  = o ? propios.filter(c => c.orden_maquina_id === o.orden_maquina_id) : [];
+    const resto = propios.filter(c => !o || c.orden_maquina_id !== o.orden_maquina_id);
+    const grupos = {};
+    resto.forEach(c => {
+      const k = c.orden_maquina_id || 'SN';
+      (grupos[k] ||= { producto:c.producto, lote:c.lote, cerrada_en:c.hora, registros:[] }).registros.push(c);
+    });
+    return {
+      ...ordenVacia(id),
+      ...(o || {}),
+      activa: !!o,
+      registros: regs,
+      ordenes_historial: Object.values(grupos),
+    };
+  });
 
 // ─── FÁBRICA DE ESTILOS (mapeada a los tokens del sistema) ────────────────────
 const mk = (t) => ({
@@ -264,8 +225,8 @@ const mk = (t) => ({
 });
 
 // ─── BANNER RANGOS ────────────────────────────────────────────────────────────
-function BannerRangos({ producto, t, S, modoListado=false }) {
-  const limL = producto ? PRODUCTOS[producto] : null;
+function BannerRangos({ producto, productos={}, t, S, modoListado=false }) {
+  const limL = producto ? productos[producto] : null;
   return (
     <div style={S.bannerRangos}>
       <div style={S.rangoFijo}>
@@ -320,9 +281,9 @@ function CCToolbar({ sesion, totalReg, totalNC, onSetup, onListado, extra, t, S 
 }
 
 // ─── MODAL ORDEN ──────────────────────────────────────────────────────────────
-function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, ordenAnterior, t, S }) {
-  const valido = form.producto && form.lote && form.cliente;
-  const limL = form.producto ? PRODUCTOS[form.producto] : null;
+function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, ordenAnterior, productos={}, guardando=false, t, S }) {
+  const valido = form.producto && form.lote && form.cliente && !guardando;
+  const limL = form.producto ? productos[form.producto] : null;
   return (
     <div style={S.overlay}>
       <div style={S.modalCard}>
@@ -333,7 +294,7 @@ function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, orde
           <label style={S.label}>Producto <span style={S.req}>*</span></label>
           <select style={S.select} value={form.producto} onChange={e=>onChange('producto',e.target.value)}>
             <option value="">Seleccionar…</option>
-            {Object.keys(PRODUCTOS).map(p=><option key={p}>{p}</option>)}
+            {Object.keys(productos).map(p=><option key={p}>{p}</option>)}
           </select>
         </div>
         {limL && (
@@ -360,7 +321,7 @@ function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, orde
         </div>
         <div style={{display:'flex',gap:10,marginTop:8}}>
           <button style={{...S.btnSec,flex:1,justifyContent:'center'}} onClick={onCancel}>Cancelar</button>
-          <button style={{...S.btnGuardar,flex:2,marginTop:0,...(!valido?S.btnDis:{})}} onClick={onConfirm} disabled={!valido}>{esCambio?'Confirmar cambio':'Iniciar orden'}</button>
+          <button style={{...S.btnGuardar,flex:2,marginTop:0,...(!valido?S.btnDis:{})}} onClick={onConfirm} disabled={!valido}>{guardando?'Guardando…':esCambio?'Confirmar cambio':'Iniciar orden'}</button>
         </div>
       </div>
     </div>
@@ -368,8 +329,8 @@ function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, orde
 }
 
 // ─── SETUP ────────────────────────────────────────────────────────────────────
-function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas, valido, onStart, t, S, COL }) {
-  const disponibles = INSPECTORES.filter(i=>!sesion.inspectores.find(x=>x.nombre===i.nombre));
+function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas, valido, onStart, inspectoresCat, maquinasList, guardando=false, t, S, COL }) {
+  const disponibles = inspectoresCat.filter(i=>!sesion.inspectores.find(x=>x.nombre===i.nombre));
   return (
     <div style={S.setupRoot}>
       <div style={S.setupCard}>
@@ -390,10 +351,10 @@ function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas
           <div style={S.asigSection}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
               <div><h3 style={S.asigTit}>Inspectores y máquinas</h3><p style={S.asigSub}>Una máquina, un inspector.</p></div>
-              <div style={S.contadorBadge}><span style={S.contadorNum}>{maqAsignadas.length}</span><span style={S.contadorLbl}>/ 10</span></div>
+              <div style={S.contadorBadge}><span style={S.contadorNum}>{maqAsignadas.length}</span><span style={S.contadorLbl}>/ {maquinasList.length}</span></div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:16}}>
-              {MAQUINAS_LIST.map(m=>{
+              {maquinasList.map(m=>{
                 const idx=sesion.inspectores.findIndex(i=>i.maquinas.includes(m));
                 const col=idx>=0?COL[idx%4]:null;
                 const dueno=idx>=0?sesion.inspectores[idx]:null;
@@ -423,7 +384,7 @@ function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas
                       <button style={S.btnQuitarInsp} onClick={()=>onQuitar(insp.nombre)}><X size={12}/> Quitar</button>
                     </div>
                     <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,padding:'12px 16px',background:'rgba(0,0,0,0.18)'}}>
-                      {MAQUINAS_LIST.map(m=>{
+                      {maquinasList.map(m=>{
                         const esMia=insp.maquinas.includes(m);
                         const esDeOtro=maqAsignadas.includes(m)&&!esMia;
                         return(<button key={m} style={{...S.maqPicker,...(esMia?{background:col.bg,borderColor:col.border,color:col.text}:{}),...(esDeOtro?{opacity:0.35,cursor:'not-allowed'}:{})}}
@@ -443,7 +404,7 @@ function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas
               </div>
             )}
             <div style={S.hintBox}>Productos y lotes se cargan al entrar a cada máquina. Los rangos de aceptación están siempre visibles durante el control.</div>
-            <button style={{...S.btnIniciar,...(!valido?S.btnIniciarDis:{})}} onClick={onStart} disabled={!valido}>Ir al tablero</button>
+            <button style={{...S.btnIniciar,...((!valido||guardando)?S.btnIniciarDis:{})}} onClick={onStart} disabled={!valido||guardando}>{guardando?'Guardando…':'Ir al tablero'}</button>
           </div>
         </div>
       </div>
@@ -454,7 +415,7 @@ function Setup({ sesion, onTurno, onAgregar, onQuitar, onToggleMaq, maqAsignadas
 function Stat({label,value,color,S}){return(<div style={S.statBox}><span style={{...S.statNum,color}}>{value}</span><span style={S.statLbl}>{label}</span></div>);}
 
 // ─── VISTA LISTADO ────────────────────────────────────────────────────────────
-function VistaListado({ registros, maquinas, sesion, onVolver, t, S }) {
+function VistaListado({ registros, maquinas, sesion, productos, onVolver, t, S }) {
   const [filtroMaq, setFiltroMaq] = useState('TODAS');
   const [filaSeleccionada, setFilaSeleccionada] = useState(null);
   const turno = TURNOS.find(x=>x.id===sesion.turno);
@@ -485,7 +446,7 @@ function VistaListado({ registros, maquinas, sesion, onVolver, t, S }) {
     <div style={S.root}>
       <CCToolbar sesion={sesion} totalReg={registros.length} totalNC={registros.filter(r=>r.no_conforme==='Sí').length} onSetup={onVolver} onListado={()=>{}} t={t} S={S}
         extra={<button style={S.btnVolver} onClick={onVolver}><ArrowLeft size={14}/> Volver</button>}/>
-      <BannerRangos producto={productoFila} modoListado={true} t={t} S={S}/>
+      <BannerRangos producto={productoFila} productos={productos} modoListado={true} t={t} S={S}/>
       <div style={S.listadoWrap}>
         <div style={S.listadoSidebar}>
           <p style={S.sidebarTit}>Cajas por máquina · Turno {turno?.label||''}</p>
@@ -582,8 +543,33 @@ export default function VistaControlCalidad({ t, currentUser }) {
   const [modalOrden, setModalOrden] = useState(false);
   const [formOrden, setFormOrden] = useState({producto:'',lote:'',cliente:'',orden_id:''});
   const [vistaListado, setVistaListado] = useState(false);
-  const [sesion, setSesion] = useState(SESION_EJEMPLO);
-  const [maquinas, setMaquinas] = useState(MAQUINAS_EJEMPLO);
+  const [sesion, setSesion] = useState(sesionNueva());
+  const [maquinas, setMaquinas] = useState([]);
+
+  // ── Datos remotos ──
+  const [cat, setCat] = useState(null);            // {productos, inspectores, defectos, maquinas}
+  const [cargando, setCargando] = useState(true);
+  const [errorCarga, setErrorCarga] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+  const [errorOp, setErrorOp] = useState(null);
+
+  const cargar = useCallback(async ()=>{
+    setCargando(true); setErrorCarga(null);
+    try {
+      const [catalogos, ses, ordenes, controles] = await Promise.all([
+        fetchCatalogos(), fetchSesionAbierta(), fetchOrdenesActivas(), fetchControlesDelDia(),
+      ]);
+      setCat(catalogos);
+      setMaquinas(armarMaquinas(catalogos.maquinas, ordenes, controles));
+      if (ses) { setSesion(ses); setFase('tablero'); }
+      else { setSesion(sesionNueva()); setFase('setup'); }
+    } catch(e){ setErrorCarga(e.message); }
+    finally { setCargando(false); }
+  },[]);
+  useEffect(()=>{ cargar(); },[cargar]);
+
+  const PRODUCTOS  = cat?.productos  || {};
+  const DEFECTOS   = cat?.defectos   || [];
 
   const maqAsignadas = sesion.inspectores.flatMap(i=>i.maquinas);
   const inspDe = id => sesion.inspectores.find(i=>i.maquinas.includes(id));
@@ -591,7 +577,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
 
   const agregarInsp = nombre => {
     if (sesion.inspectores.find(i=>i.nombre===nombre)) return;
-    const leg=INSPECTORES.find(i=>i.nombre===nombre)?.legajo||'?';
+    const leg=(cat?.inspectores||[]).find(i=>i.nombre===nombre)?.legajo||'?';
     setSesion(s=>({...s,inspectores:[...s.inspectores,{legajo:leg,nombre,maquinas:[]}]}));
   };
   const quitarInsp = nombre => setSesion(s=>({...s,inspectores:s.inspectores.filter(i=>i.nombre!==nombre)}));
@@ -613,13 +599,40 @@ export default function VistaControlCalidad({ t, currentUser }) {
     setFormOrden({producto:m.producto,lote:m.lote,cliente:m.cliente,orden_id:m.orden_id});
     setModalOrden(true);
   };
-  const confirmarOrden = () => {
-    setMaq(maquinaActiva, m=>{
-      const hist = m.activa&&m.registros.length>0 ? [...m.ordenes_historial,{...m,cerrada_en:nowTime()}] : m.ordenes_historial;
-      return{...m,...formOrden,activa:true,registros:[],ordenes_historial:hist};
-    });
-    setModalOrden(false);
-    if(fase==='tablero'){setFase('maquina');setForm(emptyForm());}
+  const confirmarOrden = async () => {
+    if (guardando) return;
+    setErrorOp(null); setGuardando(true);
+    try {
+      const nueva = await apiCambiarOrden({
+        maquinaId: maquinaActiva,
+        producto: formOrden.producto,
+        especifcProductoId: PRODUCTOS[formOrden.producto]?.id || null,
+        lote: formOrden.lote,
+        cliente: formOrden.cliente,
+        ordenId: formOrden.orden_id,
+        sesionUuid: sesion?.uuid,
+      });
+      setMaq(maquinaActiva, m=>{
+        const hist = m.activa&&m.registros.length>0 ? [...m.ordenes_historial,{producto:m.producto,lote:m.lote,cerrada_en:nowTime(),registros:m.registros}] : m.ordenes_historial;
+        return{...m,...nueva,activa:true,registros:[],ordenes_historial:hist};
+      });
+      setModalOrden(false);
+      if(fase==='tablero'){setFase('maquina');setForm(emptyForm());}
+    } catch(e){ setErrorOp(e.message); }
+    finally { setGuardando(false); }
+  };
+
+  const iniciarSesion = async () => {
+    if (guardando) return;
+    setErrorOp(null); setGuardando(true);
+    try {
+      const s = sesion.uuid
+        ? await actualizarSesion(sesion.uuid, { turno: sesion.turno, inspectores: sesion.inspectores })
+        : await crearSesion({ turno: sesion.turno, inspectores: sesion.inspectores, userId: currentUser?.id || null });
+      setSesion(s);
+      setFase('tablero');
+    } catch(e){ setErrorOp(e.message); }
+    finally { setGuardando(false); }
   };
 
   const hForm = (k,v) => setForm(f=>({...f,[k]:v}));
@@ -629,7 +642,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
   const maq       = maquinaActiva?getMaq(maquinaActiva):null;
   const limLargo  = maq?.producto?PRODUCTOS[maq.producto]:null;
   const alertasAp = form.apertura_tapa.map(fueraApertura);
-  const alertasLg = form.largo_cabezal.map(v=>fueraLargo(v,maq?.producto));
+  const alertasLg = form.largo_cabezal.map(v=>fueraLargo(v,limLargo));
   const hayAlertas= alertasAp.some(Boolean)||alertasLg.some(Boolean);
   const inspActivo= maquinaActiva?inspDe(maquinaActiva):null;
 
@@ -638,19 +651,43 @@ export default function VistaControlCalidad({ t, currentUser }) {
     && form.largo_cabezal.every(v=>v!=='')
     && (form.no_conforme==='No'||(form.cantidad_rechazo&&form.caja_desde&&form.caja_hasta));
 
-  const guardar = () => {
-    if(!formValido||!maquinaActiva) return;
-    const r={
-      ...form, hora:nowTime(),
-      id_maquina:maquinaActiva, producto:maq.producto, lote:maq.lote, cliente:maq.cliente, orden_id:maq.orden_id,
-      inspector_legajo:inspActivo?.legajo||'', inspector_nombre:inspActivo?.nombre||'',
-      turno:sesion.turno, fecha:sesion.fecha, sesion_id:sesion.id,
-      id_reg:`${maquinaActiva}-${maq.orden_id||'SN'}-R${String(maq.registros.length+1).padStart(3,'0')}`,
-      timestamp:new Date().toISOString(), alertas_ap:alertasAp, alertas_lg:alertasLg,
-    };
-    setMaq(maquinaActiva,m=>({...m,registros:[r,...m.registros]}));
-    setForm(emptyForm()); setGuardado(true);
-    setTimeout(()=>setGuardado(false),2000);
+  const guardar = async () => {
+    if(!formValido||!maquinaActiva||guardando) return;
+    setErrorOp(null); setGuardando(true);
+    try {
+      const res = await apiGuardarControl({
+        maquinaId: maquinaActiva,
+        orden: {
+          orden_maquina_id: maq.orden_maquina_id,
+          especifc_producto_id: maq.especifc_producto_id,
+          producto: maq.producto, lote: maq.lote,
+          cliente: maq.cliente, orden_id: maq.orden_id,
+        },
+        sesion, inspector: inspActivo,
+        nroCaja: form.nro_caja,
+        aperturas: form.apertura_tapa, largos: form.largo_cabezal,
+        alertasAp, alertasLg,
+        noConforme: form.no_conforme==='Sí',
+        defectosIds: form.defectos,
+        observacion: form.observacion_libre,
+        cantidadRechazo: form.cantidad_rechazo,
+        cajaDesde: form.caja_desde, cajaHasta: form.caja_hasta,
+      });
+      const nombresDef = form.defectos.map(idDef => DEFECTOS.find(d=>d.id===idDef)?.nombre || idDef);
+      const r={
+        ...form, hora:nowTime(), defectos:nombresDef, defectos_ids:form.defectos,
+        id_maquina:maquinaActiva, orden_maquina_id:maq.orden_maquina_id,
+        producto:maq.producto, lote:maq.lote, cliente:maq.cliente, orden_id:maq.orden_id,
+        inspector_legajo:inspActivo?.legajo||'', inspector_nombre:inspActivo?.nombre||'',
+        turno:sesion.turno, fecha:sesion.fecha, sesion_id:sesion.id,
+        id_reg:res.control_id, numero_secuencial:res.numero_secuencial,
+        timestamp:new Date().toISOString(), alertas_ap:alertasAp, alertas_lg:alertasLg,
+      };
+      setMaq(maquinaActiva,m=>({...m,registros:[r,...m.registros]}));
+      setForm(emptyForm()); setGuardado(true);
+      setTimeout(()=>setGuardado(false),2000);
+    } catch(e){ setErrorOp(e.message); }
+    finally { setGuardando(false); }
   };
 
   const totalReg = maquinas.reduce((a,m)=>a+m.registros.length,0);
@@ -666,17 +703,43 @@ export default function VistaControlCalidad({ t, currentUser }) {
   },[maquinas]);
 
   // ── RENDER ────────────────────────────────────────────────────────────────
-  if (fase==='setup') return (
-    <Setup sesion={sesion} onTurno={v=>setSesion(s=>({...s,turno:v}))} onAgregar={agregarInsp} onQuitar={quitarInsp}
-      onToggleMaq={toggleMaqInsp} maqAsignadas={maqAsignadas} valido={setupValido} onStart={()=>setFase('tablero')} t={t} S={S} COL={COL}/>
+  if (cargando) return (
+    <div style={{...S.root,alignItems:'center',justifyContent:'center',minHeight:'50vh'}}>
+      <Loader2 size={28} color={t.accent}/>
+      <p style={{color:t.textMuted,fontSize:13,marginTop:12}}>Cargando control de calidad…</p>
+    </div>
+  );
+  if (errorCarga) return (
+    <div style={{...S.root,alignItems:'center',justifyContent:'center',minHeight:'50vh',padding:24}}>
+      <AlertTriangle size={28} color={t.danger}/>
+      <p style={{color:t.danger,fontSize:13,margin:'12px 0',textAlign:'center'}}>{errorCarga}</p>
+      <button style={S.btnVolver} onClick={cargar}><RotateCcw size={14}/> Reintentar</button>
+    </div>
   );
 
-  if (vistaListado) return <VistaListado registros={todosLosRegistros} maquinas={maquinas} sesion={sesion} onVolver={()=>setVistaListado(false)} t={t} S={S}/>;
+  const errorBanner = errorOp && (
+    <div style={{background:t.dangerSoft,borderBottom:`2px solid ${t.danger}`,padding:'8px 24px',fontSize:13,color:t.danger,display:'flex',alignItems:'center',gap:8}}>
+      <AlertTriangle size={16}/> {errorOp}
+      <button style={{marginLeft:'auto',background:'none',border:'none',color:t.danger,cursor:'pointer'}} onClick={()=>setErrorOp(null)}><X size={14}/></button>
+    </div>
+  );
+
+  if (fase==='setup') return (
+    <>
+      {errorBanner}
+      <Setup sesion={sesion} onTurno={v=>setSesion(s=>({...s,turno:v}))} onAgregar={agregarInsp} onQuitar={quitarInsp}
+        onToggleMaq={toggleMaqInsp} maqAsignadas={maqAsignadas} valido={setupValido} onStart={iniciarSesion}
+        inspectoresCat={cat?.inspectores||[]} maquinasList={cat?.maquinas||[]} guardando={guardando} t={t} S={S} COL={COL}/>
+    </>
+  );
+
+  if (vistaListado) return <VistaListado registros={todosLosRegistros} maquinas={maquinas} sesion={sesion} productos={PRODUCTOS} onVolver={()=>setVistaListado(false)} t={t} S={S}/>;
 
   if (fase==='tablero') return (
     <div style={S.root}>
       <CCToolbar sesion={sesion} totalReg={totalReg} totalNC={totalNC} onSetup={()=>setFase('setup')} onListado={()=>setVistaListado(true)} t={t} S={S}/>
-      <BannerRangos producto={null} t={t} S={S}/>
+      {errorBanner}
+      <BannerRangos producto={null} productos={PRODUCTOS} t={t} S={S}/>
       <div style={S.body}>
         <div style={S.tableroTop}>
           <div>
@@ -732,7 +795,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
           })}
         </div>
       </div>
-      {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={getMaq(maquinaActiva)?.activa} ordenAnterior={getMaq(maquinaActiva)?.producto} t={t} S={S}/>}
+      {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={getMaq(maquinaActiva)?.activa} ordenAnterior={getMaq(maquinaActiva)?.producto} productos={PRODUCTOS} guardando={guardando} t={t} S={S}/>}
     </div>
   );
 
@@ -742,7 +805,8 @@ export default function VistaControlCalidad({ t, currentUser }) {
       <div style={S.root}>
         <CCToolbar sesion={sesion} totalReg={totalReg} totalNC={totalNC} onSetup={()=>setFase('setup')} onListado={()=>setVistaListado(true)} t={t} S={S}
           extra={<button style={S.btnVolver} onClick={()=>setFase('tablero')}><ArrowLeft size={14}/> Tablero</button>}/>
-        <BannerRangos producto={maq.producto} t={t} S={S}/>
+        {errorBanner}
+        <BannerRangos producto={maq.producto} productos={PRODUCTOS} t={t} S={S}/>
         {hayAlertas&&<div style={S.alertaBanner}><AlertTriangle size={16}/> Hay mediciones <strong>fuera de rango</strong> — revisá antes de guardar.</div>}
 
         <div style={{...S.bannerMaq,...(col?{borderBottomColor:col.border}:{borderBottomColor:t.border})}}>
@@ -809,8 +873,8 @@ export default function VistaControlCalidad({ t, currentUser }) {
             <div style={S.campo}>
               <label style={S.label}>Defecto (seleccioná uno o más)</label>
               <div style={S.chipGrid}>
-                {DEFECTOS_LISTA.map(d=>(
-                  <button key={d} style={{...S.chip,...(form.defectos.includes(d)?S.chipOn:{})}} onClick={()=>toggleDef(d)}>{d}</button>
+                {DEFECTOS.map(d=>(
+                  <button key={d.id} style={{...S.chip,...(form.defectos.includes(d.id)?S.chipOn:{})}} onClick={()=>toggleDef(d.id)}>{d.nombre}</button>
                 ))}
               </div>
             </div>
@@ -896,8 +960,8 @@ export default function VistaControlCalidad({ t, currentUser }) {
             {form.no_conforme==='No'&&(
               <div style={S.conformeBox}><CheckCircle2 size={40} color={t.success}/><p style={{color:t.success,margin:'8px 0 0',fontSize:13}}>Sin no conformidades.</p></div>
             )}
-            <button style={{...S.btnGuardar,...(!formValido?S.btnDis:{}),...(guardado?S.btnOK:{})}} onClick={guardar} disabled={!formValido}>
-              {guardado?<><Check size={16}/> Guardado</>:<><Save size={16}/> Guardar registro</>}
+            <button style={{...S.btnGuardar,...((!formValido||guardando)?S.btnDis:{}),...(guardado?S.btnOK:{})}} onClick={guardar} disabled={!formValido||guardando}>
+              {guardando?<><Loader2 size={16}/> Guardando…</>:guardado?<><Check size={16}/> Guardado</>:<><Save size={16}/> Guardar registro</>}
             </button>
 
             {maq.registros.length>0&&(
@@ -917,7 +981,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
           </section>
         </div>
 
-        {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={true} ordenAnterior={maq.producto} t={t} S={S}/>}
+        {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={true} ordenAnterior={maq.producto} productos={PRODUCTOS} guardando={guardando} t={t} S={S}/>}
       </div>
     );
   }
