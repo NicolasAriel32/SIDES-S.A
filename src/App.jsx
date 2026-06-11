@@ -787,8 +787,10 @@ const dataService = {
       .maybeSingle()
 
     console.log('createTest maquina lookup:', { maquina, maquinaError, test })
+    this._ultimoError = null
     if (maquinaError || !maquina) {
       console.error('createTest: máquina no encontrada', { maquina: test.maquina, maquinaError })
+      this._ultimoError = maquinaError?.message || `máquina ${test.maquina} no encontrada`
       return null
     }
 
@@ -852,6 +854,7 @@ const dataService = {
       }
 
       console.error('createTest:', error)
+      this._ultimoError = error.message
       return null
     }
 
@@ -2041,6 +2044,8 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [showSuccess, setShowSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [maquinaInfo, setMaquinaInfo] = useState(null);
+  // v7: catálogo de máquinas para el selector de roles de supervisión
+  const [machinesList, setMachinesList] = useState([]);
   const [pruebasDelTurno, setPruebasDelTurno] = useState([]);
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState(0);
   // v6: flag para que el auto-guardado de PENDIENTE (60 min) solo se ejecute una vez
@@ -2083,6 +2088,47 @@ const VistaOperario = ({ t, user, refresh }) => {
     return delTurno.filter(test => test.estadoFinal !== 'PENDIENTE').length + 1;
   };
 
+  // v7: persistencia local de la señal del PLC — la regla de los 60 minutos
+  // sigue corriendo aunque el operario recargue la página o cierre el navegador.
+  const LIMITE_PENDIENTE_SEG = 3600; // 60 min
+  const claveSenal   = (maquinaId) => `senal_plc_${user.legajo}_${maquinaId}`;
+  const persistirSenal = (maquinaId, senal) => { try { localStorage.setItem(claveSenal(maquinaId), JSON.stringify(senal)); } catch {} };
+  const limpiarSenal   = (maquinaId) => { try { localStorage.removeItem(claveSenal(maquinaId)); } catch {} };
+  const leerSenal      = (maquinaId) => { try { return JSON.parse(localStorage.getItem(claveSenal(maquinaId)) || 'null'); } catch { return null; } };
+
+  // v7: registra una señal vencida como PENDIENTE (sin datos de carga) y la
+  // limpia del almacenamiento local. Se usa al volver a entrar con una señal
+  // que ya superó los 60 minutos.
+  const registrarPendienteAuto = async (senal, maquinaId) => {
+    try {
+      const test = {
+        ...senal,
+        operario: `${user.nombre} ${user.apellido}`,
+        legajoOperario: user.legajo,
+        estado: 'PENDIENTE',
+        caja: null, lote: null, codigoProducto: null,
+        observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
+        tipos: [], cabezalesFalla: 0, esperandoAprobacion: false,
+        timestamp: new Date().toISOString(),
+        autoPendiente: true,
+      };
+      const inserted = await dataService.createTest(test);
+      if (inserted) {
+        await dataService.logEvent({
+          accion: 'AUTO_PENDIENTE',
+          usuario: `${user.nombre} ${user.apellido}`,
+          usuarioLegajo: user.legajo,
+          desc: `Prueba ${senal.id} auto-registrada como PENDIENTE · 60 min sin carga (detectado al reingresar)`,
+          tabla: 'pruebas',
+          registroId: inserted.supabase_id,
+        });
+      }
+    } catch (e) {
+      console.error('registrarPendienteAuto:', e);
+    }
+    limpiarSenal(maquinaId);
+  };
+
   useEffect(() => {
     const init = async () => {
       const machines = await dataService.getMachines();
@@ -2095,15 +2141,51 @@ const VistaOperario = ({ t, user, refresh }) => {
         m = { id: asignadaId, nombre: asignadaId, linea: '—', activa: true, integrada: false };
       }
       if (!m) m = machines[0] || null;
+      setMachinesList(machines);
       setMaquinaInfo(m);
 
       // Recalcular contador y autocompletar lote/producto con último registro de la máquina
       if (m?.id) await recalcularContador(m.id, true);
+
+      // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
+      // PENDIENTE automáticamente y el operario espera la próxima señal.
+      const guardada = m?.id ? leerSenal(m.id) : null;
+      if (guardada?.fechaSenal) {
+        const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
+        if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+          await registrarPendienteAuto(guardada, m.id);
+          setPruebaPendiente(null);
+          if (m?.id) await recalcularContador(m.id);
+          refresh();
+        } else {
+          setPruebaPendiente(guardada);   // el reloj sigue desde la señal original
+        }
+        return;
+      }
       // pruebaPendiente queda en null hasta que el operario presione el botón
       setPruebaPendiente(null);
     };
     init();
   }, [user]);
+
+  // v7: cambio de máquina para roles de supervisión (carga en cualquier máquina)
+  const cambiarMaquina = async (id) => {
+    const m = machinesList.find(x => x.id === id);
+    if (!m || m.id === maquinaInfo?.id) return;
+    setMaquinaInfo(m);
+    setPruebaPendiente(null);
+    setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+    setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
+    setLoteAutocompletado(false);
+    await recalcularContador(m.id, true);
+    // restaurar señal persistida de esa máquina (si existe)
+    const guardada = leerSenal(m.id);
+    if (guardada?.fechaSenal) {
+      const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
+      if (transcurrido >= LIMITE_PENDIENTE_SEG) await registrarPendienteAuto(guardada, m.id);
+      else setPruebaPendiente(guardada);
+    }
+  };
 
   // FIX v5: botón manual para simular la señal del PLC
   const generarSenalPLC = async () => {
@@ -2111,13 +2193,15 @@ const VistaOperario = ({ t, user, refresh }) => {
     const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
     const ahora = new Date();
     // FIX v6: fecha del ID usa zona AR para que coincida con el día calendario local
-    setPruebaPendiente({
+    const senal = {
       id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
       maquina: maquinaInfo.id,
       numeroSecuencial: numeroPrueba,
       fechaSenal: ahora.toISOString(),
       fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
-    });
+    };
+    setPruebaPendiente(senal);
+    persistirSenal(maquinaInfo.id, senal);   // v7: sobrevive recargas / cierre del navegador
     await dataService.logEvent({
       accion: 'SIGNAL',
       usuario: `${user.nombre} ${user.apellido}`,
@@ -2138,7 +2222,6 @@ const VistaOperario = ({ t, user, refresh }) => {
   }, [pruebaPendiente]);
 
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
-  const LIMITE_PENDIENTE_SEG = 3600; // 60 min
   const autoGuardarComoPendiente = async () => {
     if (!pruebaPendiente || autoGuardado) return;
     setAutoGuardado(true);
@@ -2173,6 +2256,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       console.error('autoGuardarComoPendiente:', e);
     }
     // Resetear form
+    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: la señal vencida no debe revivir al recargar
     setPruebaPendiente(null);
     setAutoGuardado(false);
     setTuvoFalla(null);
@@ -2298,6 +2382,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       if (!inserted) {
         alert(
           'No se pudo registrar la prueba.\n\n' +
+          (dataService._ultimoError ? `Detalle: ${dataService._ultimoError}\n\n` : '') +
           `Verificá que la máquina ${test.maquina} esté creada en la tabla "maquinas" ` +
           'y que el legajo del operario exista en "usuarios".'
         );
@@ -2307,6 +2392,8 @@ const VistaOperario = ({ t, user, refresh }) => {
         accion: 'CREATE', usuario: `${user.nombre} ${user.apellido}`,
         desc: `Prueba ${inserted.id} · ${test.estado} · ${codigoProducto}`
       });
+
+      if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: prueba cargada → señal consumida
 
       setShowSuccess(true);
       setTimeout(async () => {
@@ -2354,9 +2441,23 @@ const VistaOperario = ({ t, user, refresh }) => {
         <div style={{ display: 'flex', gap: 28, alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>MÁQUINA</div>
-            <div style={{ fontFamily: 'JetBrains Mono', color: t.text, fontSize: 14, fontWeight: 500 }}>
-              {maquinaInfo?.id || '—'}{maquinaInfo?.linea ? ` · ${maquinaInfo.linea}` : ''}
-            </div>
+            {user.rol !== 'operario' && machinesList.length > 0 ? (
+              /* v7: roles de supervisión pueden cargar pruebas en cualquier máquina */
+              <select
+                value={maquinaInfo?.id || ''}
+                onChange={e => cambiarMaquina(e.target.value)}
+                style={{
+                  fontFamily: 'JetBrains Mono', fontSize: 13, fontWeight: 500,
+                  background: t.surfaceHi, color: t.text, border: `1px solid ${t.border}`,
+                  borderRadius: 6, padding: '4px 8px', cursor: 'pointer', outline: 'none'
+                }}>
+                {machinesList.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+              </select>
+            ) : (
+              <div style={{ fontFamily: 'JetBrains Mono', color: t.text, fontSize: 14, fontWeight: 500 }}>
+                {maquinaInfo?.id || '—'}{maquinaInfo?.linea ? ` · ${maquinaInfo.linea}` : ''}
+              </div>
+            )}
           </div>
           <div style={{ width: 1, height: 32, background: t.border }} />
           <div>
@@ -3271,10 +3372,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [machines, setMachines] = useState([]);
   const [tests, setTests] = useState([]);
   const [observarTest, setObservarTest] = useState(null);
-  const [ncHistory, setNcHistory] = useState([]);
   const [unreadObs, setUnreadObs] = useState([]);
-  const [gestionarNC, setGestionarNC] = useState(null);
-  const [aprobandoNC, setAprobandoNC] = useState(false);
   // FIX v5: alerta in-app cuando llega una prueba RECHAZADA recién cargada
   const [alertaFalla, setAlertaFalla] = useState(null);
   // FIX v5: tab activa (turno actual / historial)
@@ -3291,7 +3389,6 @@ const VistaSupervisor = ({ t, currentUser }) => {
     // FIX v7: solo trae pruebas del turno activo para que el turno noche
     // no mezcle registros del día anterior al cruzar la medianoche.
     setTests(await dataService.getTests(inicioTurnoActual()));
-    setNcHistory(await dataService.getNCHistory());
     setUnreadObs(await dataService.getAllUnreadObservations());
     setVerifPendientes(await dataService.getVerificacionesPendientes());
   };
@@ -3367,7 +3464,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   }, [])
 
   const machinesIntegradas = machines.filter(m => m.integrada);
-  const idealAhora = 6;
+  const idealAhora = 8;
   const machinesProgress = machinesIntegradas.map(m => {
     const mTests = tests.filter(t => t.maquina === m.id);
     // Desglose por resultado
@@ -3424,19 +3521,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const tasaFalla = totalPruebas > 0 ? Math.round((pruebasRechazadas / totalPruebas) * 100) : 0;
   const totalIncidenciasTipos = paretoTurno.reduce((s, p) => s + p.cantidad, 0);
 
-  // CAMBIO v4: KPI tiempo promedio de cierre de NC
-  const ncCerradas = ncHistory.filter(nc => nc.estado === 'CERRADA' && nc.cerradaAt);
-  const tiempoPromedioCierre = useMemo(() => {
-    if (ncCerradas.length === 0) return null;
-    const totalMs = ncCerradas.reduce((sum, nc) => {
-      return sum + (new Date(nc.cerradaAt).getTime() - new Date(nc.timestamp).getTime());
-    }, 0);
-    const promedioMs = totalMs / ncCerradas.length;
-    const min = Math.floor(promedioMs / 60000);
-    if (min < 60) return `${min}m`;
-    const hr = Math.floor(min / 60);
-    return `${hr}h ${min % 60}m`;
-  }, [ncCerradas]);
+  // v7: KPI de NC removido — las NC se gestionan en Control de Calidad
+  const pruebasOK = tests.filter(t => t.estado !== 'RECHAZADO' && t.estadoFinal !== 'PENDIENTE').length;
 
   // CAMBIO v4: Observaciones no leídas con tiempo desde envío
   const obsNoLeidasMin = useMemo(() => {
@@ -3446,14 +3532,18 @@ const VistaSupervisor = ({ t, currentUser }) => {
   }, [unreadObs]);
 
   const enviarObservacion = async (mensaje) => {
-    await dataService.addObservation({
+    const res = await dataService.addObservation({
       testId:           observarTest.id,
       pruebaId:         observarTest.supabase_id,   // FIX: evita lookup por numero_secuencial
       maquina:          observarTest.maquina,
       legajoOperario:   observarTest.legajoOperario,
       supervisor:       `${currentUser.nombre} ${currentUser.apellido}`,
+      supervisorLegajo: currentUser.legajo,
       mensaje,
     })
+    // v7: si el insert falla (p.ej. RLS) el modal muestra el error en vez de
+    // cerrar como si hubiera salido bien
+    if (!res) return false
     await dataService.logEvent({
       accion: 'OBSERVE',
       usuario: `${currentUser.nombre} ${currentUser.apellido}`,
@@ -3461,6 +3551,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
     })
     setObservarTest(null)
     reload()
+    return true
   }
 
   const enviarAColaDeAprobacion = async () => {
@@ -3476,30 +3567,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
     reload();
   }
 
-  const aprobarRechazo = async () => {
-    if (aprobandoNC) return;
-    setAprobandoNC(true);
-    try {
-      await dataService.updateTest(enAprobacion.id, { esperandoAprobacion: false, aprobado: true });
-      await dataService.createNC({
-        pruebaId:        enAprobacion.id,
-        pruebaSupabaseId: enAprobacion.supabase_id,  // FIX: evita lookup por numero_secuencial
-        maquina:         enAprobacion.maquina,
-        operario:        enAprobacion.operario,
-        tipos:           enAprobacion.tipos,
-        cabezalesFalla:  enAprobacion.cabezalesFalla,
-        observaciones:   enAprobacion.observaciones,
-        aprobadoPor:     `${currentUser.nombre} ${currentUser.apellido}`,
-      });
-      await dataService.logEvent({
-        accion: 'APPROVE', usuario: `${currentUser.nombre} ${currentUser.apellido}`,
-        desc: `Aprobado rechazo ${enAprobacion.id} · NC abierta`
-      });
-      reload();
-    } finally {
-      setAprobandoNC(false);
-    }
-  };
+  // v7: se quitó "aprobar rechazo y abrir NC" — los rechazos se gestionan en el
+  // módulo de Control de Calidad. La cola solo notifica y deja asentado el aviso.
 
   // v6: quitar de la cola sin abrir NC — solo marcar como revisado/leído
   const marcarLeidoAprobacion = async () => {
@@ -3513,20 +3582,6 @@ const VistaSupervisor = ({ t, currentUser }) => {
       desc: `Prueba ${enAprobacion.id} quitada de cola de aprobaciones · marcada como leída (sin NC)`
     });
     reload();
-  };
-
-  // CAMBIO v4: actualizar NC desde el modal
-  const actualizarNC = async (ncId, updates) => {
-    const updated = await dataService.updateNC(ncId, updates);
-    if (!updated) return false;   // señal de fallo al modal
-    await dataService.logEvent({
-      accion: updates.estado === 'CERRADA' ? 'CLOSE_NC' : 'UPDATE_NC',
-      usuario: `${currentUser.nombre} ${currentUser.apellido}`,
-      desc: `${updates.estado === 'CERRADA' ? 'Cerró' : 'Actualizó'} ${ncId}`
-    });
-    setGestionarNC(updated);
-    reload();
-    return true;
   };
 
   return (
@@ -3688,8 +3743,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
         <KPI t={t} label="Bloqueadas PENDIENTE" value={pruebasBloqueadas}
           sub={pruebasBloqueadas > 0 ? 'sin registro · no modificables' : 'ninguna este turno'}
           tone={pruebasBloqueadas > 0 ? 'danger' : 'success'} />
-        <KPI t={t} label="Promedio cierre NC" value={tiempoPromedioCierre || '—'}
-          sub={ncCerradas.length > 0 ? `${ncCerradas.length} NC cerradas hoy` : 'sin NC cerradas aún'}
+        <KPI t={t} label="Pruebas OK" value={pruebasOK}
+          sub={totalPruebas > 0 ? `${Math.round((pruebasOK / totalPruebas) * 100)}% del turno` : 'sin pruebas aún'}
           tone="success" />
       </div>
 
@@ -3826,37 +3881,64 @@ const VistaSupervisor = ({ t, currentUser }) => {
                 )}
               </div>
             </div>
+            {/* v7: ya no se abren NC desde estanqueidad — los rechazos se gestionan
+                en el módulo de Control de Calidad. Acá queda asentado el registro
+                de la falla del operario y el aviso del supervisor/inspector. */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <ButtonSm t={t} onClick={() => setObservarTest(enAprobacion)}>
                 <MessageSquare size={12} /> Observar
               </ButtonSm>
-              {/* v6: quitar de la cola SIN abrir NC — solo marca como leído */}
-              <ButtonSm t={t} variant="warn" onClick={marcarLeidoAprobacion}>
-                <Eye size={12} /> Marcar como leído
-              </ButtonSm>
-              <ButtonSm t={t} variant="success" grow onClick={aprobarRechazo} disabled={aprobandoNC}>
-                {aprobandoNC ? 'Procesando…' : 'Aprobar rechazo y abrir No Conformidad'}
+              <ButtonSm t={t} variant="warn" grow onClick={marcarLeidoAprobacion}>
+                <Eye size={12} /> Marcar como leído y quitar de la cola
               </ButtonSm>
             </div>
           </div>
         </Card>
       )}
 
-      {/* Historial NC del turno */}
+      {/* v7: Historial de pruebas del turno (reemplaza al panel de NC —
+          el historial completo por mes/día/turno está en la pestaña Historial) */}
       <Card t={t} padding={20}>
         <SectionHeader t={t}
-          title="Historial de no conformidades del turno"
-          sub={`${ncHistory.length} en total · ${ncHistory.filter(n => n.estado !== 'CERRADA').length} sin cerrar`}
+          title="Pruebas del turno"
+          sub={`${tests.length} registradas · ${pruebasRechazadas} con falla · ${pruebasBloqueadas} bloqueadas PENDIENTE — historial completo por mes/día/turno en la pestaña Historial`}
         />
         <div style={{ marginTop: 14 }}>
-          {ncHistory.length === 0 ? (
+          {tests.length === 0 ? (
             <EmptyState icon={History} t={t}
-              title="Sin no conformidades en el turno"
-              desc="Acá vas a ver todas las NC que se abran a medida que se aprueben los rechazos. Click en cada una para gestionar." />
+              title="Sin pruebas en el turno"
+              desc="A medida que los operarios carguen pruebas las vas a ver acá, con su estado y avisos." />
           ) : (
-            ncHistory.map((nc, i) => (
-              <NCHistoryRow key={nc.id} nc={nc} t={t} index={i} onClick={() => setGestionarNC(nc)} />
-            ))
+            [...tests]
+              .sort((a, b) => new Date(b.timestampSenal || b.timestamp) - new Date(a.timestampSenal || a.timestamp))
+              .map(test => {
+                const esRech = test.estado === 'RECHAZADO';
+                const esBloq = test.estadoFinal === 'PENDIENTE';
+                const color = esBloq ? '#ff9800' : esRech ? t.danger : t.success;
+                const label = esBloq ? 'BLOQUEADA' : esRech ? 'RECHAZADA' : 'OK';
+                const hora = new Date(test.timestampSenal || test.timestamp)
+                  .toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+                return (
+                  <div key={test.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px',
+                    borderBottom: `1px solid ${t.border}`,
+                    background: esRech ? t.dangerSoft : 'transparent', borderRadius: 6
+                  }}>
+                    <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: t.textDim, width: 44 }}>{hora}hs</span>
+                    <span style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: t.text, fontWeight: 500 }}>{test.id}</span>
+                    <span style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>{test.maquina}</span>
+                    <span style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                      {test.operario}{test.caja ? ` · caja ${test.caja}` : ''}{test.lote ? ` · lote ${test.lote}` : ''}
+                      {esRech && test.tipos?.length > 0 && ` · ${test.tipos.map(tid => TIPOS_FALLA.find(x => x.id === tid)?.nombre).filter(Boolean).join(', ')}`}
+                    </span>
+                    <span style={{
+                      fontFamily: 'JetBrains Mono', fontSize: 10, fontWeight: 700, color,
+                      background: `${color}18`, border: `1px solid ${color}40`,
+                      padding: '2px 8px', borderRadius: 4
+                    }}>{label}</span>
+                  </div>
+                );
+              })
           )}
         </div>
       </Card>
@@ -3871,15 +3953,6 @@ const VistaSupervisor = ({ t, currentUser }) => {
         />
       )}
 
-      {gestionarNC && (
-        <ModalGestionarNC
-          nc={gestionarNC}
-          currentUser={currentUser}
-          onClose={() => setGestionarNC(null)}
-          onUpdate={actualizarNC}
-          t={t}
-        />
-      )}
     </div>
   );
 };
@@ -4927,6 +5000,7 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
   const [seleccionadas, setSeleccionadas] = useState([]);
   const [mensaje, setMensaje] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorEnvio, setErrorEnvio] = useState(null);
 
   const toggle = (id) => {
     setSeleccionadas(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
@@ -4937,8 +5011,12 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
     if (mensaje.trim()) textos.push(mensaje.trim());
     if (textos.length === 0 || loading) return;
     setLoading(true);
-    await onSend(textos.join(' · '));
+    setErrorEnvio(null);
+    const ok = await onSend(textos.join(' · '));
     setLoading(false);
+    if (ok === false) {
+      setErrorEnvio('No se pudo enviar la observación. Verificá tu conexión o permisos e intentá de nuevo.');
+    }
   };
 
   const puedeEnviar = (seleccionadas.length > 0 || mensaje.trim().length > 0) && !loading;
@@ -4987,6 +5065,16 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
           }}
         />
       </div>
+      {errorEnvio && (
+        <div style={{
+          marginBottom: 10, padding: '10px 12px', borderRadius: 6,
+          background: t.dangerSoft, border: `1px solid ${t.danger}`,
+          color: t.danger, fontFamily: 'Manrope', fontSize: 12,
+          display: 'flex', alignItems: 'center', gap: 8
+        }}>
+          <AlertTriangle size={14} /> {errorEnvio}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8 }}>
         <ButtonSm t={t} grow onClick={onClose} disabled={loading}>Cancelar</ButtonSm>
         <ButtonSm t={t} variant="accent" grow disabled={!puedeEnviar} onClick={handleSend}>

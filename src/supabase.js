@@ -24,8 +24,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  // auth: usa los defaults de Supabase (persistSession=true, autoRefreshToken=true)
-  // Esto es necesario para que auth.uid() funcione correctamente en RLS.
+  auth: {
+    // v7: la sesión de Auth vive en sessionStorage (por pestaña) en lugar de
+    // localStorage (compartido). Antes, al abrir dos pestañas con usuarios
+    // distintos (p.ej. operario + supervisor), la última pisaba la sesión de
+    // la otra y las requests salían autenticadas como el usuario equivocado
+    // → RLS devolvía 403 de forma intermitente.
+    // Trade-off: al abrir una pestaña nueva hay que volver a iniciar sesión.
+    storage: window.sessionStorage,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
   realtime: {
     params: {
       eventsPerSecond: 5,    // Limita el throughput del canal Realtime

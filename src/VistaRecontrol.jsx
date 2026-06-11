@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   fetchCatalogos, fetchRechazosPendientes, fetchRecontrolesDelDia,
-  guardarRecontrol as apiGuardarRecontrol,
+  fetchRecontrolesHistorial, guardarRecontrol as apiGuardarRecontrol,
 } from './api/calidad.js';
 
 /* =================================================================
@@ -96,7 +96,15 @@ export default function VistaRecontrol({ t, currentUser }) {
   const [pendientes, setPendientes] = useState([]);
   const [hechos, setHechos] = useState([]);
   const [defectosCat, setDefectosCat] = useState([]);
-  const [inspectoresCat, setInspectoresCat] = useState([]);
+  // v7: el recontrol lo puede registrar cualquier usuario activo del sistema
+  const [usuariosCat, setUsuariosCat] = useState([]);
+  // v7: historial por mes y turno
+  const hoy = new Date();
+  const [histAnio, setHistAnio] = useState(hoy.getFullYear());
+  const [histMes, setHistMes] = useState(hoy.getMonth());
+  const [histTurno, setHistTurno] = useState(null);   // null = todos
+  const [historial, setHistorial] = useState([]);
+  const [histCargando, setHistCargando] = useState(false);
   const [activoId, setActivoId] = useState(null);
   const [form, setForm] = useState(emptyPlanilla());
   const [guardado, setGuardado] = useState(false);
@@ -112,13 +120,27 @@ export default function VistaRecontrol({ t, currentUser }) {
         fetchCatalogos(), fetchRechazosPendientes(), fetchRecontrolesDelDia(),
       ]);
       setDefectosCat(cat.defectos);
-      setInspectoresCat(cat.inspectores);
+      setUsuariosCat(cat.usuarios || []);
       setPendientes(pend);
       setHechos(rec);
     } catch(e){ setErrorCarga(e.message); }
     finally { setCargando(false); }
   },[]);
   useEffect(()=>{ cargar(); },[cargar]);
+
+  // v7: historial de recontroles finalizados (por mes y turno)
+  useEffect(()=>{
+    let cancelado = false;
+    (async ()=>{
+      setHistCargando(true);
+      try {
+        const rows = await fetchRecontrolesHistorial({ anio: histAnio, mes: histMes, turno: histTurno });
+        if (!cancelado) setHistorial(rows);
+      } catch(e){ console.error('historial recontroles:', e); }
+      finally { if (!cancelado) setHistCargando(false); }
+    })();
+    return ()=>{ cancelado = true; };
+  },[histAnio, histMes, histTurno, hechos.length]);
 
   const tone = (name) => ({success:t.success,warn:t.warn,danger:t.danger}[name] || t.textMuted);
   const toneSoft = (name) => ({success:t.successSoft,warn:t.warnSoft,danger:t.dangerSoft}[name] || t.surfaceHi);
@@ -150,7 +172,7 @@ export default function VistaRecontrol({ t, currentUser }) {
     if(!formValido||!activo) return;
     setErrorOp(null); setGuardando(true);
     try {
-      const insp = inspectoresCat.find(i=>i.legajo===form.inspector);
+      const insp = usuariosCat.find(i=>i.legajo===form.inspector);
       await apiGuardarRecontrol({
         noConformidadId: activo.id,
         controlCalidadId: activo.control_calidad_id,
@@ -223,7 +245,7 @@ export default function VistaRecontrol({ t, currentUser }) {
 
           {hechos.length>0 && (
             <div style={{marginTop:22}}>
-              <p style={{...S.listaPie,marginBottom:10,fontWeight:500,color:t.textMuted}}>Recontrolados en esta sesión</p>
+              <p style={{...S.listaPie,marginBottom:10,fontWeight:500,color:t.textMuted}}>Recontrolados hoy</p>
               {hechos.map(r=>{
                 const lbl=RESULTADO_LBL[r._resultado];
                 return(
@@ -241,6 +263,75 @@ export default function VistaRecontrol({ t, currentUser }) {
               })}
             </div>
           )}
+
+          {/* v7: historial de recontroles finalizados — filtrable por mes y turno */}
+          <div style={{marginTop:30,borderTop:`1px solid ${t.border}`,paddingTop:18}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:12}}>
+              <div>
+                <h2 style={{...S.listaTit,fontSize:16,margin:0}}>Historial de recontroles</h2>
+                <p style={{...S.listaPie,margin:'2px 0 0'}}>Pallets que ya salieron a depósito · {historial.length} en el período</p>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <input
+                  type="month"
+                  style={{...S.select,width:'auto',padding:'7px 10px',fontSize:12}}
+                  value={`${histAnio}-${String(histMes+1).padStart(2,'0')}`}
+                  onChange={e=>{
+                    const [a,m]=e.target.value.split('-').map(Number);
+                    if(a&&m){ setHistAnio(a); setHistMes(m-1); }
+                  }}
+                />
+                {[{id:null,lbl:'Todos'},{id:'M',lbl:'Mañana'},{id:'T',lbl:'Tarde'},{id:'N',lbl:'Noche'}].map(x=>(
+                  <button key={String(x.id)} onClick={()=>setHistTurno(x.id)}
+                    style={{...S.chip,...(histTurno===x.id?S.chipOn:{}),padding:'7px 12px'}}>{x.lbl}</button>
+                ))}
+              </div>
+            </div>
+
+            {histCargando ? (
+              <p style={{color:t.textDim,fontSize:13,textAlign:'center',padding:'20px 0'}}>Cargando historial…</p>
+            ) : historial.length===0 ? (
+              <p style={{color:t.textDim,fontSize:13,textAlign:'center',padding:'20px 0'}}>
+                Sin recontroles en {String(histMes+1).padStart(2,'0')}/{histAnio}{histTurno?` · turno ${({M:'Mañana',T:'Tarde',N:'Noche'})[histTurno]}`:''}.
+              </p>
+            ) : (
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                  <thead>
+                    <tr>
+                      {['Fecha','Hora','Turno','Rechazo','Máquina','Producto','Lote','Controló','Acción','Desc.','Recup.','Merma (kg)','Resultado'].map(h=>(
+                        <th key={h} style={{padding:'8px 10px',textAlign:'left',fontSize:10,fontWeight:600,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.05em',borderBottom:`2px solid ${t.border}`,whiteSpace:'nowrap'}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historial.map(r=>{
+                      const lbl=RESULTADO_LBL[r._resultado];
+                      return(
+                        <tr key={r.id} style={{borderBottom:`1px solid ${t.border}`}}>
+                          <td style={{padding:'7px 10px',color:t.textMuted,whiteSpace:'nowrap'}}>{r.fecha}</td>
+                          <td style={{padding:'7px 10px',color:t.textDim,fontFamily:"'JetBrains Mono',monospace"}}>{r.hora}</td>
+                          <td style={{padding:'7px 10px',color:t.textMuted}}>{({M:'Mañana',T:'Tarde',N:'Noche'})[r.turno]||'—'}</td>
+                          <td style={{padding:'7px 10px',color:t.danger,fontWeight:600,fontFamily:"'JetBrains Mono',monospace"}}>#{r.numero}</td>
+                          <td style={{padding:'7px 10px',color:t.text,fontWeight:500}}>{r.id_maquina}</td>
+                          <td style={{padding:'7px 10px',color:t.textMuted}}>{r.producto}</td>
+                          <td style={{padding:'7px 10px',color:t.textMuted,fontFamily:"'JetBrains Mono',monospace"}}>{r.lote}</td>
+                          <td style={{padding:'7px 10px',color:t.textMuted}}>{r.inspector}</td>
+                          <td style={{padding:'7px 10px',color:t.textDim}}>{r.accion||'—'}</td>
+                          <td style={{padding:'7px 10px',color:t.danger,fontWeight:600}}>{r._descartados}</td>
+                          <td style={{padding:'7px 10px',color:t.success,fontWeight:600}}>{r._recuperados}</td>
+                          <td style={{padding:'7px 10px',color:t.warn,fontWeight:600}}>{r._merma.toFixed(3)}</td>
+                          <td style={{padding:'7px 10px'}}>
+                            {lbl && <span style={{...S.pill,fontSize:10,background:toneSoft(lbl.tone),color:tone(lbl.tone),border:`1px solid ${tone(lbl.tone)}40`}}>{lbl.txt}</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -280,14 +371,14 @@ export default function VistaRecontrol({ t, currentUser }) {
 
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 16px'}}>
             <div style={S.campo}>
-              <label style={S.label}>Inspector de turno <span style={S.req}>*</span></label>
+              <label style={S.label}>Quién controla (legajo) <span style={S.req}>*</span></label>
               <select style={S.select} value={form.inspector} onChange={e=>hF('inspector',e.target.value)}>
                 <option value="">Seleccionar…</option>
-                {inspectoresCat.map(i=><option key={i.legajo} value={i.legajo}>{i.nombre} ({i.legajo})</option>)}
+                {usuariosCat.map(i=><option key={i.legajo} value={i.legajo}>{i.legajo} — {i.nombre}</option>)}
               </select>
             </div>
             <div style={S.campo}>
-              <label style={S.label}>Acción previa <span style={S.req}>*</span></label>
+              <label style={S.label}>Acción <span style={S.req}>*</span></label>
               <select style={S.select} value={form.accion_previa} onChange={e=>hF('accion_previa',e.target.value)}>
                 <option value="">Seleccionar…</option>
                 {ACCIONES_PREVIAS.map(a=><option key={a}>{a}</option>)}

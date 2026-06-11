@@ -26,16 +26,18 @@ export const fmtFecha = (ts) => {
 // CATÁLOGOS
 // =================================================================
 export async function fetchCatalogos() {
-  const [prod, insp, def, maq] = await Promise.all([
+  const [prod, insp, def, maq, usr] = await Promise.all([
     supabase.from('especifc_producto').select('*').eq('activo', true).order('nombre_producto'),
     supabase.from('inspectores_calidad').select('legajo, nombre').eq('activo', true).order('legajo'),
     supabase.from('tipos_falla').select('id, nombre, gravedad').order('nombre'),
     supabase.from('maquinas').select('id, nombre, activa').order('id'),
+    supabase.from('usuarios').select('legajo, nombre, apellido, rol').eq('activo', true).order('legajo'),
   ])
   throwIf(prod.error, 'productos')
   throwIf(insp.error, 'inspectores')
   throwIf(def.error, 'defectos')
   throwIf(maq.error, 'maquinas')
+  throwIf(usr.error, 'usuarios')
 
   // productos como mapa { nombre: {id, largo_min, largo_max, largo_nom, apertura_min, apertura_max} }
   const productos = {}
@@ -54,6 +56,12 @@ export async function fetchCatalogos() {
     inspectores: insp.data,
     defectos: def.data,                       // [{id:'PCD', nombre:'Pico descolorido', gravedad}]
     maquinas: maq.data.filter(m => m.activa !== false).map(m => m.id),
+    // todos los usuarios activos del sistema (el recontrol lo puede hacer cualquiera)
+    usuarios: usr.data.map(u => ({
+      legajo: u.legajo,
+      nombre: `${u.nombre || ''} ${u.apellido || ''}`.trim(),
+      rol: u.rol,
+    })),
   }
 }
 
@@ -336,6 +344,56 @@ export async function fetchRecontrolesDelDia() {
       id_maquina: c?.id_maquina || '—',
       producto: c?.nombre_producto || '—',
       lote: c?.numero_lote || '—',
+      _resultado: r.resultado,
+      _merma: Number(r.kg_merma || 0),
+      _descartados: r.cabezales_descartados,
+      _recuperados: r.cabezales_recuperados,
+    }
+  })
+}
+
+/**
+ * Historial de recontroles finalizados, filtrable por mes y turno.
+ * anio/mes definen el mes calendario (mes 0-11); turno 'M'|'T'|'N'|null (todos).
+ */
+export async function fetchRecontrolesHistorial({ anio, mes, turno = null }) {
+  const desde = new Date(anio, mes, 1)
+  const hasta = new Date(anio, mes + 1, 1)
+  let q = supabase
+    .from('recontroles')
+    .select(`
+      id, numero_secuencial, numero_intento, resultado, kg_merma, turno_codigo,
+      cabezales_reinspeccionados, cabezales_descartados, cabezales_recuperados,
+      inspector_nombre, inspector_legajo, accion_previa, es_recontrol_final,
+      observaciones, fecha_hora,
+      no_conformidades!recontroles_no_conformidad_id_fkey (
+        numero_nc, estado,
+        controles_calidad!no_conformidades_control_calidad_id_fkey (id_maquina, nombre_producto, numero_lote, cliente)
+      )
+    `)
+    .gte('fecha_hora', desde.toISOString())
+    .lt('fecha_hora', hasta.toISOString())
+    .eq('anulado', false)
+    .order('fecha_hora', { ascending: false })
+  if (turno) q = q.eq('turno_codigo', turno)
+  const { data, error } = await q
+  throwIf(error, 'fetchRecontrolesHistorial')
+  return (data || []).map(r => {
+    const nc = r.no_conformidades
+    const c = nc?.controles_calidad
+    return {
+      id: r.id,
+      numero: nc?.numero_nc,
+      fecha: fmtFecha(r.fecha_hora),
+      hora: fmtHora(r.fecha_hora),
+      turno: r.turno_codigo || '—',
+      id_maquina: c?.id_maquina || '—',
+      producto: c?.nombre_producto || '—',
+      lote: c?.numero_lote || '—',
+      inspector: r.inspector_nombre || r.inspector_legajo,
+      accion: r.accion_previa,
+      intento: r.numero_intento,
+      es_final: r.es_recontrol_final,
       _resultado: r.resultado,
       _merma: Number(r.kg_merma || 0),
       _descartados: r.cabezales_descartados,
