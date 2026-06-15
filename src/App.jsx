@@ -973,33 +973,19 @@ const dataService = {
   // Si tampoco hay current user, usa '0000' (placeholder admin) para no romper
   // la NOT NULL constraint. hash_evento/firma_evento van nulos (deuda ISO).
   async logEvent(event) {
-    let usuarioLegajo = event.usuarioLegajo
-    let usuarioNombre = event.usuario
-    if (!usuarioLegajo) {
-      try {
-        const stored = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)
-        if (stored) {
-          const cur = JSON.parse(stored)
-          usuarioLegajo = cur?.legajo
-          if (!usuarioNombre) usuarioNombre = `${cur?.nombre || ''} ${cur?.apellido || ''}`.trim()
-        }
-      } catch {}
-    }
-    if (!usuarioLegajo) usuarioLegajo = '0000'  // fallback de emergencia
-
-    const { data, error } = await supabase
-      .from('audit_log')
-      .insert({
-        usuario_legajo:  usuarioLegajo,
-        usuario_nombre:  usuarioNombre || null,
-        accion:          event.accion,
-        descripcion:     event.desc || null,
-        tabla_afectada:  event.tabla || null,
-        registro_id:     event.registroId || null
-      })
-
-    console.log('logEvent supabase response:', { event, data, error })
-    if (error) console.error('logEvent:', error)
+    // C1 (no-repudio): la auditoría se escribe vía la RPC SECURITY DEFINER
+    // `registrar_evento_auditoria`. El actor lo deriva el servidor desde el usuario
+    // autenticado (auth.uid()), así que NO se puede falsificar, y el evento entra en
+    // la cadena de hash de audit_log. El cliente ya NO inserta directo en audit_log
+    // (INSERT revocado a anon/authenticated). El campo `event.usuario` queda sólo por
+    // compatibilidad con los call sites; el servidor lo ignora.
+    const { error } = await supabase.rpc('registrar_evento_auditoria', {
+      p_accion:      event.accion,
+      p_descripcion: event.desc || null,
+      p_tabla:       event.tabla || null,
+      p_registro_id: event.registroId || null
+    })
+    if (error) console.error('logEvent (rpc):', error)
   },
 
   // ===== OBSERVACIONES =====
@@ -5454,72 +5440,13 @@ const PantallaPasillo = ({ t }) => {
   };
 
   const cargarDatos = async () => {
-    const inicioActual   = inicioTurnoActual();
-    const inicioAnterior = new Date(inicioActual.getTime() - 8 * 60 * 60 * 1000);
-    const hace7d         = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const hace48h        = new Date(inicioActual.getTime() - 5 * 8 * 60 * 60 * 1000); // 6 turnos atrás
-
-    const [testsActual, testsAnterior, tests7d, ncHistory, machines] = await Promise.all([
-      dataService.getTests(inicioActual),
-      dataService.getTests(inicioAnterior).then(all =>
-        all.filter(tt => new Date(tt.timestampSenal || tt.timestamp) < inicioActual)
-      ),
-      dataService.getTests(hace7d),
-      dataService.getNCHistory(),
-      dataService.getMachines(),
-    ]);
-
-    // KPIs turno actual
-    const totalActual     = testsActual.length;
-    const rechazActual    = testsActual.filter(tt => tt.estado === 'RECHAZADO').length;
-    const tasaActual      = totalActual > 0 ? (rechazActual / totalActual * 100).toFixed(1) : '0.0';
-    const pendientes      = testsActual.filter(tt => tt.estadoFinal === 'PENDIENTE').length;
-    const ncAbiertas      = ncHistory.filter(nc => nc.estado === 'ABIERTA' || nc.estado === 'EN ANALISIS').length;
-    const maquinasActivas = machines.filter(m => m.integrada).length;
-    const maquinasTotal   = machines.length;
-    const idealTurno      = maquinasActivas * 8;
-
-    // Tasa turno anterior (comparación)
-    const totalAnterior  = testsAnterior.length;
-    const rechazAnterior = testsAnterior.filter(tt => tt.estado === 'RECHAZADO').length;
-    const tasaAnterior   = totalAnterior > 0 ? (rechazAnterior / totalAnterior * 100).toFixed(1) : null;
-
-    // Promedio cierre NC (histórico)
-    const ncCerradas = ncHistory.filter(nc => nc.estado === 'CERRADA' && nc.cerradaAt && nc.timestamp);
-    const promCierreMin = ncCerradas.length > 0
-      ? Math.round(ncCerradas.reduce((s, nc) =>
-          s + (new Date(nc.cerradaAt) - new Date(nc.timestamp)), 0
-        ) / ncCerradas.length / 60000)
-      : null;
-
-    // Pareto TOP 3 — últimos 7 días
-    const paretoMap = {};
-    tests7d.filter(tt => tt.tipos?.length).forEach(tt =>
-      tt.tipos.forEach(tid => { paretoMap[tid] = (paretoMap[tid] || 0) + 1; })
-    );
-    const paretoTop = Object.entries(paretoMap)
-      .map(([id, n]) => ({ nombre: TIPOS_FALLA.find(tf => tf.id === id)?.nombre || id, cantidad: n }))
-      .sort((a, b) => b.cantidad - a.cantidad)
-      .slice(0, 3);
-
-    // Gráfico tendencia — últimos 6 turnos
-    const grafico = [];
-    for (let i = 5; i >= 0; i--) {
-      const ini = new Date(inicioActual.getTime() - i * 8 * 60 * 60 * 1000);
-      const fin = new Date(ini.getTime() + 8 * 60 * 60 * 1000);
-      const pool = i === 0 ? testsActual : tests7d.filter(tt => {
-        const ts = new Date(tt.timestampSenal || tt.timestamp);
-        return ts >= ini && ts < fin;
-      });
-      const tot  = pool.length;
-      const rej  = pool.filter(tt => tt.estado === 'RECHAZADO').length;
-      const tasa = tot > 0 ? parseFloat((rej / tot * 100).toFixed(1)) : 0;
-      grafico.push({ label: labelTurno(ini, i === 0), tasa, total: tot });
-    }
-
-    const turnoActual = turnoDeFecha(new Date());
-    setDatos({ totalActual, rechazActual, tasaActual, tasaAnterior, pendientes, ncAbiertas,
-               maquinasActivas, maquinasTotal, idealTurno, promCierreMin, paretoTop, grafico, turnoActual });
+    // A4: el pasillo (modo anónimo, sin login) ya NO lee tablas crudas como anon.
+    // Llama a la RPC SECURITY DEFINER pasillo_kpis(), que devuelve SOLO indicadores
+    // agregados (tasas, conteos, top-3 de fallas, tendencia) — sin filas crudas ni
+    // datos personales (operario, lote, caja). anon no tiene acceso a las tablas.
+    const { data: kpis, error } = await supabase.rpc('pasillo_kpis');
+    if (error) { console.error('pasillo_kpis:', error); return; }
+    setDatos(kpis);
     setUltimoRefresh(new Date().toLocaleTimeString('es-AR', {
       hour: '2-digit', minute: '2-digit', second: '2-digit',
       timeZone: 'America/Argentina/Buenos_Aires'
