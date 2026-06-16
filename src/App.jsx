@@ -140,7 +140,7 @@ const mapUserToDb = (user) => ({
   apellido: user.apellido,
   email: user.email,                       // FIX: el email ahora se persiste
   rol: user.rol,
-  password_hash: user.password,            // schema real: password_hash
+  // M4: password_hash eliminado — la contraseña vive en Supabase Auth, no en usuarios
   fuerza_cambio: user.forceChange,         // schema real: fuerza_cambio
   maquina_asignada: user.maquinaAsignada,
   activo: user.activo,
