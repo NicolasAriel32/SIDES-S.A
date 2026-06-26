@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Informe de Cierre — Sistema de Trazabilidad de Estanqueidad — SIDES S.A.</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #1c2733; line-height: 1.55; font-size: 11.5pt; margin: 0;
+  }
+  h1 { font-size: 22pt; color: #0f3d5c; margin: 0 0 4px; line-height: 1.15; }
+  h2 { font-size: 15pt; color: #0f3d5c; margin: 26px 0 8px; border-bottom: 2px solid #cfe0ec; padding-bottom: 4px; }
+  h3 { font-size: 12.5pt; color: #14618c; margin: 16px 0 6px; }
+  p { margin: 6px 0; }
+  .sub { color: #5a6b7a; font-size: 11pt; margin-top: 2px; }
+  .meta { color: #5a6b7a; font-size: 10pt; margin-top: 14px; }
+  .cover { padding-top: 30mm; }
+  .badge { display:inline-block; background:#0f3d5c; color:#fff; padding:4px 12px; border-radius:14px; font-size:10pt; letter-spacing:.04em; }
+  .lead { font-size: 12pt; }
+  .box { background:#f3f8fc; border:1px solid #cfe0ec; border-radius:8px; padding:14px 16px; margin:14px 0; }
+  .box.ok { background:#eef8f0; border-color:#bfe3c9; }
+  .box.warn { background:#fff7e9; border-color:#f0dcae; }
+  table { width:100%; border-collapse: collapse; margin:10px 0 4px; font-size:10.8pt; }
+  th, td { text-align:left; vertical-align:top; padding:7px 9px; border-bottom:1px solid #e2eaf0; }
+  th { background:#0f3d5c; color:#fff; font-weight:600; }
+  th:first-child, td:first-child { width:42%; }
+  tr:nth-child(even) td { background:#f7fafc; }
+  .check { color:#1c7a3c; font-weight:700; }
+  ul { margin:6px 0 6px 18px; padding:0; }
+  li { margin:4px 0; }
+  .pagebreak { page-break-before: always; }
+  .foot { color:#5a6b7a; font-size:9.5pt; border-top:1px solid #e2eaf0; margin-top:26px; padding-top:8px; }
+</style>
+</head>
+<body>
+
+<!-- ===================== PORTADA / PRESENTACIÓN A GERENCIA ===================== -->
+<section class="cover">
+  <span class="badge">INFORME DE CIERRE · CALIDAD</span>
+  <h1>Sistema de Trazabilidad de Pruebas de Estanqueidad</h1>
+  <p class="sub">SIDES S.A. — Preparación para el piloto frente al área de Calidad</p>
+  <p class="meta">Fecha: 15 de junio de 2026 &nbsp;·&nbsp; Destinatarios: Gerencia y Calidad</p>
+
+  <h2>En pocas palabras (para Gerencia)</h2>
+  <p class="lead">
+    Tenemos un sistema que registra y resguarda <strong>cada prueba de estanqueidad</strong> que hacemos en planta:
+    qué se probó, en qué máquina, quién lo hizo y con qué resultado. El objetivo es simple: que esa información sea
+    <strong>confiable, completa y que no se pueda alterar a escondidas</strong>, para poder demostrarlo ante un auditor o un cliente.
+  </p>
+
+  <div class="box ok">
+    <p style="margin:0"><strong>Resultado:</strong> se revisó el sistema a fondo y se corrigieron <strong>todos los puntos
+    importantes detectados</strong>. Hoy los registros quedan sellados y no se pueden borrar sin dejar rastro, cada persona
+    accede solo a lo que le corresponde según su puesto, y la información queda respaldada y trazable de principio a fin.
+    <strong>El sistema está en condiciones de presentarse al piloto de Calidad.</strong></p>
+  </div>
+
+  <h3>¿Qué cambió, en concreto?</h3>
+  <ul>
+    <li><strong>Nada se pierde ni se altera en silencio:</strong> cada registro queda "sellado" y encadenado con el anterior;
+        si alguien intentara modificar o borrar algo, el sistema lo detecta.</li>
+    <li><strong>Cada uno en su rol:</strong> el operario ve solo las pruebas de su máquina; supervisores e inspectores
+        gestionan calidad; el administrador configura; el auditor solo mira. Nadie puede hacer de más.</li>
+    <li><strong>Queda constancia de todo:</strong> el sistema anota automáticamente quién hizo qué y cuándo, sin depender
+        de que alguien se acuerde de cargarlo.</li>
+    <li><strong>No se borra, se anula con motivo:</strong> los registros no se eliminan; si hay un error, se anula dejando
+        explicado el porqué.</li>
+  </ul>
+</section>
+
+<!-- ===================== CUMPLIMIENTO POR NORMA ===================== -->
+<section class="pagebreak">
+  <h2>Cómo cumplimos cada norma (explicado simple)</h2>
+  <p>Para cada norma se muestra <strong>qué pide</strong> y <strong>cómo lo cumple hoy el sistema</strong>.</p>
+
+  <h3>ISO 9001 — Gestión de Calidad</h3>
+  <table>
+    <tr><th>Qué exige la norma</th><th>Cómo lo cumple el sistema</th></tr>
+    <tr><td>Registrar de forma completa cada prueba</td>
+        <td>Cada prueba queda guardada con fecha, máquina, operario y resultado. <span class="check">✔</span></td></tr>
+    <tr><td>Que los registros no se puedan alterar</td>
+        <td>Cada registro queda sellado y encadenado; los cambios y las bajas quedan auditados; nada se borra físicamente. <span class="check">✔</span></td></tr>
+    <tr><td>Controlar las no conformidades (fallas)</td>
+        <td>Una prueba marcada como rechazada exige tener su falla registrada; las no conformidades se abren y cierran con un responsable. <span class="check">✔</span></td></tr>
+    <tr><td>Trazabilidad de la muestra (lote y caja)</td>
+        <td>Cada prueba queda ligada a su número de lote y de caja. <span class="check">✔</span></td></tr>
+    <tr><td>Equipos de medición bajo control (calibración)</td>
+        <td>El sistema permite registrar la calibración por máquina y deja marcado en cada prueba si la calibración estaba vigente. <span class="check">✔</span></td></tr>
+    <tr><td>Indicadores de gestión</td>
+        <td>Tasa de fallas, pruebas pendientes y productividad por turno disponibles para reportes. <span class="check">✔</span></td></tr>
+  </table>
+
+  <h3>ISO 27001 — Seguridad de la Información</h3>
+  <table>
+    <tr><th>Qué exige la norma</th><th>Cómo lo cumple el sistema</th></tr>
+    <tr><td>Acceso según el rol de cada persona</td>
+        <td>Operario, supervisor, inspector, administrador y auditor: cada uno ve y hace solo lo suyo; el operario solo lo de su máquina. <span class="check">✔</span></td></tr>
+    <tr><td>Registro de auditoría (quién hizo qué y cuándo)</td>
+        <td>El sistema lo registra de forma automática; ya no depende de que alguien lo cargue a mano. <span class="check">✔</span></td></tr>
+    <tr><td>Que los datos no se puedan eliminar</td>
+        <td>No se pueden borrar registros desde la aplicación; solo anularlos con una justificación. <span class="check">✔</span></td></tr>
+    <tr><td>Contraseñas resguardadas</td>
+        <td>Las contraseñas se guardan cifradas por el proveedor de identidad; nunca se almacenan en texto legible. <span class="check">✔</span></td></tr>
+    <tr><td>Limitar lo que se ve sin iniciar sesión</td>
+        <td>La pantalla de planta (sin usuario) muestra solo indicadores generales; ningún dato sensible queda expuesto. <span class="check">✔</span></td></tr>
+  </table>
+
+  <h3>Normas IRAM (aplicables)</h3>
+  <table>
+    <tr><th>Qué exige</th><th>Cómo lo cumple el sistema</th></tr>
+    <tr><td>Procedimiento documentado y auditable</td>
+        <td>El proceso queda registrado de forma ordenada y revisable. <span class="check">✔</span></td></tr>
+    <tr><td>Responsables identificados por registro</td>
+        <td>Cada registro queda atado a la persona que lo generó. <span class="check">✔</span></td></tr>
+    <tr><td>Trazabilidad de número de lote y caja</td>
+        <td>Cumplido: cada prueba conserva su lote y caja. <span class="check">✔</span></td></tr>
+  </table>
+</section>
+
+<!-- ===================== PENDIENTES Y CIERRE ===================== -->
+<section class="pagebreak">
+  <h2>Punto pendiente (menor y opcional)</h2>
+  <div class="box warn">
+    <p style="margin:0"><strong>Chequeo de contraseñas filtradas.</strong> Es una protección adicional que compara las
+    contraseñas contra listas públicas de contraseñas robadas. Es una <strong>mejora opcional</strong> que el proveedor del
+    sistema ofrece solo en su plan pago. No afecta el funcionamiento ni el cumplimiento de fondo; se puede activar con un
+    clic si se decide subir de plan.</p>
+  </div>
+
+  <h2>Conclusión</h2>
+  <p>
+    El sistema cubre hoy los tres pilares que exige una auditoría sobre este proceso: <strong>trazabilidad</strong>
+    (saber qué pasó con cada muestra de principio a fin), <strong>no-repudio</strong> (que nadie pueda negar o alterar lo
+    que hizo) y <strong>control de acceso</strong> (que cada uno opere solo dentro de su rol). Con las correcciones aplicadas,
+    <strong>el sistema está listo para el piloto frente al área de Calidad.</strong>
+  </p>
+
+  <div class="foot">
+    Documento preparado para uso interno de SIDES S.A. — Resumen de cierre de la revisión técnica del sistema de
+    trazabilidad de pruebas de estanqueidad. Junio 2026.
+  </div>
+</section>
+
+</body>
+</html>

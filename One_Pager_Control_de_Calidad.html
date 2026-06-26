@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Control de Calidad — Del sistema de macros al sistema digital — SIDES S.A.</title>
+<style>
+  @page { size: A4; margin: 14mm 15mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; color:#1c2733; margin:0; font-size:10.5pt; line-height:1.4; }
+  .top { border-left:6px solid #d9622b; padding-left:12px; margin-bottom:10px; }
+  .kicker { color:#d9622b; font-size:9pt; letter-spacing:.08em; font-weight:700; text-transform:uppercase; }
+  h1 { font-size:18pt; color:#0f3d5c; margin:2px 0 2px; line-height:1.12; }
+  .subtitle { color:#5a6b7a; font-size:10.5pt; }
+  .intro { margin:8px 0 12px; }
+  h2 { font-size:11.5pt; color:#0f3d5c; margin:14px 0 6px; }
+  table { width:100%; border-collapse:collapse; font-size:9.6pt; }
+  th, td { text-align:left; vertical-align:top; padding:6px 8px; border-bottom:1px solid #e2eaf0; }
+  th { background:#0f3d5c; color:#fff; font-weight:600; }
+  th:first-child, td:first-child { width:20%; font-weight:600; color:#0f3d5c; }
+  th:nth-child(2), td:nth-child(2) { width:38%; }
+  .antes { color:#8a3b2e; }
+  .ahora { color:#1c7a3c; font-weight:500; }
+  tr:nth-child(even) td { background:#f7fafc; }
+  .valor { display:flex; gap:8px; margin:12px 0 6px; }
+  .vcard { flex:1; background:#f3f8fc; border:1px solid #cfe0ec; border-radius:7px; padding:8px 10px; }
+  .vcard b { color:#0f3d5c; display:block; font-size:10pt; }
+  .vcard span { font-size:8.8pt; color:#48586a; }
+  .status { background:#eef8f0; border:1px solid #bfe3c9; border-radius:7px; padding:9px 12px; margin-top:10px; font-size:9.8pt; }
+  .foot { color:#5a6b7a; font-size:8.6pt; border-top:1px solid #e2eaf0; margin-top:12px; padding-top:7px; }
+  .hl { background:#fff2e9; padding:0 3px; border-radius:3px; font-weight:600; color:#b8501f; }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="kicker">Iniciativa de mejora · Resumen para Gerencia</div>
+  <h1>Control de Calidad de cabezales: del sistema de macros al sistema digital</h1>
+  <div class="subtitle">SIDES S.A. — Reemplazo del control de calidad actual, revisado por Calidad y Producción</div>
+</div>
+
+<div class="intro">
+  El control de calidad de cabezales se hace hoy con un sistema de <strong>planillas y macros</strong> que tiene años
+  de uso: va lento, obliga a recargar los mismos datos una y otra vez y se presta a errores. Se desarrolló internamente
+  un <strong>sistema digital que lo reemplaza</strong>, más rápido, con cálculos automáticos y con los registros
+  resguardados. Abajo, el antes y el ahora.
+</div>
+
+<h2>Antes (macros) &nbsp;→&nbsp; Ahora (sistema)</h2>
+<table>
+  <tr><th>Aspecto</th><th>Antes — planillas y macros</th><th>Ahora — sistema digital</th></tr>
+  <tr>
+    <td>Carga de cada control</td>
+    <td class="antes">~14 datos por registro, repitiendo lo mismo en cada control</td>
+    <td class="ahora"><span class="hl">3 datos + 8 mediciones</span>; lo fijo del turno (lote, máquina, inspector, producto, cliente) se carga una sola vez</td>
+  </tr>
+  <tr>
+    <td>Merma y recuperados</td>
+    <td class="antes">Se calculan a mano en la macro: lento y con riesgo de error en un dato que es plata</td>
+    <td class="ahora">Cálculo automático. Ej. real: 1.344 cabezales → 1.224 recuperados, 120 descartados, <span class="hl">2.208 kg de merma</span></td>
+  </tr>
+  <tr>
+    <td>No conformidades</td>
+    <td class="antes">Bloque siempre presente, datos sueltos en distintas planillas</td>
+    <td class="ahora">Aparece solo cuando hace falta; queda registrado y trazable</td>
+  </tr>
+  <tr>
+    <td>Recontrol de rechazos</td>
+    <td class="antes">Seguimiento manual, fácil de perder o dejar a medias</td>
+    <td class="ahora">Cola que abre → recontrola → cierra cada rechazo, auditable de punta a punta</td>
+  </tr>
+  <tr>
+    <td>Responsable</td>
+    <td class="antes">Difícil saber con certeza quién controló qué</td>
+    <td class="ahora">"Una máquina, un inspector": responsable claro por máquina y turno</td>
+  </tr>
+  <tr>
+    <td>Visibilidad</td>
+    <td class="antes">Hay que pedir o armar planillas para saber el estado</td>
+    <td class="ahora">Tablero en vivo: registros, no conformes y máquinas activas del turno</td>
+  </tr>
+  <tr>
+    <td>Tecnología</td>
+    <td class="antes">Macros lentas y propensas a error</td>
+    <td class="ahora">Sistema web rápido, con datos validados y resguardados (no se pierden ni se alteran)</td>
+  </tr>
+</table>
+
+<h2>Qué gana la empresa</h2>
+<div class="valor">
+  <div class="vcard"><b>Menos tiempo</b><span>El inspector mide, no transcribe datos repetidos.</span></div>
+  <div class="vcard"><b>Menos errores</b><span>Cálculos automáticos y campos validados.</span></div>
+  <div class="vcard"><b>Costo más confiable</b><span>La merma (kg) sale sola, no de una macro a mano.</span></div>
+  <div class="vcard"><b>Trazabilidad</b><span>Quién, qué y cuándo, listo para auditoría ISO/IRAM.</span></div>
+</div>
+
+<div class="status">
+  <strong>Estado:</strong> en marcha y mostrable. Revisado por la jefa de calidad y el jefe de producción.
+  Listo para una <strong>prueba piloto controlada, sin frenar la producción</strong> y con su autorización.
+  Desarrollado internamente, lo que baja costos y tiempos frente a un desarrollo externo.
+</div>
+
+<div class="foot">
+  Preparado por Nicolás Giménez — [sector / interno] · Junio 2026 · Documento de uso interno, SIDES S.A.
+</div>
+
+</body>
+</html>
