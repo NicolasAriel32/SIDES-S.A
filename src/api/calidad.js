@@ -121,10 +121,21 @@ export async function cerrarSesion(sesionUuid) {
 // =================================================================
 // ÓRDENES POR MÁQUINA
 // =================================================================
+/** Catálogo de clientes activos (tabla clientes). */
+export async function fetchClientes() {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('id, nombre')
+    .eq('activo', true)
+    .order('nombre')
+  throwIf(error, 'fetchClientes')
+  return data || []
+}
+
 export async function fetchOrdenesActivas() {
   const { data, error } = await supabase
     .from('ordenes_maquina')
-    .select('*')
+    .select('*, clientes(nombre)')
     .eq('activa', true)
   throwIf(error, 'fetchOrdenesActivas')
   // mapa por máquina
@@ -135,7 +146,8 @@ export async function fetchOrdenesActivas() {
       especifc_producto_id: o.especifc_producto_id,
       producto: o.nombre_producto,
       lote: o.numero_lote,
-      cliente: o.cliente || '',
+      cliente: o.clientes?.nombre || '',
+      cliente_id: o.cliente_id || null,
       orden_id: o.orden_produccion || '',
     }
   }
@@ -143,7 +155,23 @@ export async function fetchOrdenesActivas() {
 }
 
 /** Cierra la orden activa (si existe) y abre una nueva. */
-export async function cambiarOrden({ maquinaId, producto, especifcProductoId, lote, cliente, ordenId, sesionUuid }) {
+export async function cambiarOrden({ maquinaId, producto, especifcProductoId, lote, cliente, clienteId, ordenId, sesionUuid }) {
+  // Migración relacional: si no llega clienteId pero sí el nombre, se resuelve
+  // contra la tabla clientes. La columna de texto `cliente` queda en NULL
+  // (constraint ordenes_maquina_cliente_not_null_guard exige cliente IS NULL).
+  let cliId = clienteId || null
+  if (!cliId && cliente) {
+    const { data: cli, error: errCli } = await supabase
+      .from('clientes')
+      .select('id')
+      .eq('nombre', cliente)
+      .eq('activo', true)
+      .maybeSingle()
+    throwIf(errCli, 'cambiarOrden.cliente')
+    if (!cli) throw new Error(`Cliente no encontrado en catálogo: "${cliente}"`)
+    cliId = cli.id
+  }
+
   const { error: errCierre } = await supabase
     .from('ordenes_maquina')
     .update({ activa: false, cerrada_en: new Date().toISOString() })
@@ -158,11 +186,12 @@ export async function cambiarOrden({ maquinaId, producto, especifcProductoId, lo
       especifc_producto_id: especifcProductoId || null,
       nombre_producto: producto,
       numero_lote: lote,
-      cliente: cliente || null,
+      cliente: null,
+      cliente_id: cliId,
       orden_produccion: ordenId || null,
       sesion_apertura_id: sesionUuid || null,
     })
-    .select()
+    .select('*, clientes(nombre)')
     .single()
   throwIf(error, 'cambiarOrden.alta')
   return {
@@ -170,7 +199,8 @@ export async function cambiarOrden({ maquinaId, producto, especifcProductoId, lo
     especifc_producto_id: data.especifc_producto_id,
     producto: data.nombre_producto,
     lote: data.numero_lote,
-    cliente: data.cliente || '',
+    cliente: data.clientes?.nombre || cliente || '',
+    cliente_id: data.cliente_id || null,
     orden_id: data.orden_produccion || '',
   }
 }

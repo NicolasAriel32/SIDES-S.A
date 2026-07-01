@@ -7,6 +7,7 @@ import {
   fetchCatalogos, fetchSesionAbierta, crearSesion, actualizarSesion,
   fetchOrdenesActivas, cambiarOrden as apiCambiarOrden,
   fetchControlesDelDia, guardarControl as apiGuardarControl,
+  fetchClientes,
 } from './api/calidad.js';
 
 /* =================================================================
@@ -20,7 +21,6 @@ import {
 const APERTURA_MIN = 800;
 const APERTURA_MAX = 1800;
 
-const CLIENTES = ['Supermercados Norte','Distribuidora Sur','Horeca BA','Exportación Chile','Stock propio','SIDES'];
 const TURNOS = [
   { id:'M', label:'Mañana' },
   { id:'T', label:'Tarde'  },
@@ -281,7 +281,7 @@ function CCToolbar({ sesion, totalReg, totalNC, onSetup, onListado, extra, t, S 
 }
 
 // ─── MODAL ORDEN ──────────────────────────────────────────────────────────────
-function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, ordenAnterior, productos={}, guardando=false, t, S }) {
+function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, ordenAnterior, productos={}, clientes=[], guardando=false, t, S }) {
   const valido = form.producto && form.lote && form.cliente && !guardando;
   const limL = form.producto ? productos[form.producto] : null;
   return (
@@ -316,7 +316,7 @@ function ModalOrden({ maqId, form, onChange, onConfirm, onCancel, esCambio, orde
           <label style={S.label}>Cliente <span style={S.req}>*</span></label>
           <select style={S.select} value={form.cliente} onChange={e=>onChange('cliente',e.target.value)}>
             <option value="">Seleccionar…</option>
-            {CLIENTES.map(c=><option key={c}>{c}</option>)}
+            {clientes.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
           </select>
         </div>
         <div style={{display:'flex',gap:10,marginTop:8}}>
@@ -545,6 +545,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
   const [vistaListado, setVistaListado] = useState(false);
   const [sesion, setSesion] = useState(sesionNueva());
   const [maquinas, setMaquinas] = useState([]);
+  const [clientes, setClientes] = useState([]);
 
   // ── Datos remotos ──
   const [cat, setCat] = useState(null);            // {productos, inspectores, defectos, maquinas}
@@ -556,10 +557,11 @@ export default function VistaControlCalidad({ t, currentUser }) {
   const cargar = useCallback(async ()=>{
     setCargando(true); setErrorCarga(null);
     try {
-      const [catalogos, ses, ordenes, controles] = await Promise.all([
-        fetchCatalogos(), fetchSesionAbierta(), fetchOrdenesActivas(), fetchControlesDelDia(),
+      const [catalogos, ses, ordenes, controles, clientesCat] = await Promise.all([
+        fetchCatalogos(), fetchSesionAbierta(), fetchOrdenesActivas(), fetchControlesDelDia(), fetchClientes(),
       ]);
       setCat(catalogos);
+      setClientes(clientesCat);
       setMaquinas(armarMaquinas(catalogos.maquinas, ordenes, controles));
       if (ses) { setSesion(ses); setFase('tablero'); }
       else { setSesion(sesionNueva()); setFase('setup'); }
@@ -609,6 +611,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
         especifcProductoId: PRODUCTOS[formOrden.producto]?.id || null,
         lote: formOrden.lote,
         cliente: formOrden.cliente,
+        clienteId: clientes.find(c=>c.nombre===formOrden.cliente)?.id || null,
         ordenId: formOrden.orden_id,
         sesionUuid: sesion?.uuid,
       });
@@ -795,7 +798,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
           })}
         </div>
       </div>
-      {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={getMaq(maquinaActiva)?.activa} ordenAnterior={getMaq(maquinaActiva)?.producto} productos={PRODUCTOS} guardando={guardando} t={t} S={S}/>}
+      {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={getMaq(maquinaActiva)?.activa} ordenAnterior={getMaq(maquinaActiva)?.producto} productos={PRODUCTOS} clientes={clientes} guardando={guardando} t={t} S={S}/>}
     </div>
   );
 
@@ -981,7 +984,7 @@ export default function VistaControlCalidad({ t, currentUser }) {
           </section>
         </div>
 
-        {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={true} ordenAnterior={maq.producto} productos={PRODUCTOS} guardando={guardando} t={t} S={S}/>}
+        {modalOrden&&<ModalOrden maqId={maquinaActiva} form={formOrden} onChange={(k,v)=>setFormOrden(f=>({...f,[k]:v}))} onConfirm={confirmarOrden} onCancel={()=>setModalOrden(false)} esCambio={true} ordenAnterior={maq.producto} productos={PRODUCTOS} clientes={clientes} guardando={guardando} t={t} S={S}/>}
       </div>
     );
   }
