@@ -228,7 +228,7 @@ const controlToFront = (r) => {
     sesion_id: r.sesion_id,
     lote: r.numero_lote,
     producto: r.nombre_producto,
-    cliente: r.cliente,
+    cliente: r.cliente || r.clientes?.nombre || '',
     orden_id: r.orden_id,
     inspector_legajo: r.inspector_legajo,
     inspector_nombre: r.inspector_nombre,
@@ -253,7 +253,7 @@ export async function fetchControlesDelDia() {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
   const { data, error } = await supabase
     .from('controles_calidad')
-    .select('*, mediciones(*), controles_defectos(tipo_falla_id, tipos_falla(nombre))')
+    .select('*, clientes(nombre), mediciones(*), controles_defectos(tipo_falla_id, tipos_falla(nombre))')
     .gte('fecha_hora', hoy.toISOString())
     .eq('anulada', false)
     .order('fecha_hora', { ascending: false })
@@ -312,7 +312,7 @@ export async function fetchRechazosPendientes() {
     .select(`
       id, numero_nc, estado, timestamp_apertura,
       controles_calidad!no_conformidades_control_calidad_id_fkey (
-        id, id_maquina, nombre_producto, numero_lote, cliente,
+        id, id_maquina, nombre_producto, numero_lote, cliente, clientes(nombre),
         caja_desde, caja_hasta, cantidad_rechazo,
         inspector_nombre, observacion_libre, fecha_hora,
         controles_defectos(tipo_falla_id, tipos_falla(nombre))
@@ -337,7 +337,7 @@ export async function fetchRechazosPendientes() {
         id_maquina: c.id_maquina,
         producto: c.nombre_producto,
         lote: c.numero_lote,
-        cliente: c.cliente,
+        cliente: c.cliente || c.clientes?.nombre || '',
         caja_desde: c.caja_desde != null ? String(c.caja_desde) : '',
         caja_hasta: c.caja_hasta != null ? String(c.caja_hasta) : '',
         cantidad_rechazo: c.cantidad_rechazo || 0,
