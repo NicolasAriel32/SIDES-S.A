@@ -1,0 +1,21 @@
+-- Continuous audit integrity monitoring
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Creates:
+--   public.audit_integrity_checks
+--   public.run_audit_integrity_check()
+--   public.v_audit_integrity_latest
+--   cron job audit-integrity-daily
+--
+-- Runtime:
+--   daily at 05:15 UTC (02:15 Argentina)
+--
+-- Behavior:
+--   * recomputes the legacy snapshot;
+--   * validates chain-v2 hashes and predecessor links;
+--   * persists append-only OK/FAIL evidence;
+--   * appends AUDIT_INTEGRITY_OK / AUDIT_INTEGRITY_FAIL to audit_log;
+--   * raises a PostgreSQL WARNING on failure.
+--
+-- The authoritative function body is present in Supabase migration history:
+--   iso_continuous_audit_integrity_monitoring
