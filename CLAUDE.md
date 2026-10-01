@@ -1,3 +1,5 @@
+> **Fuente de verdad actual:** antes de proponer o implementar cambios, leer `CONSTITUTION.md`. Allí están las reglas de negocio e invariantes globales del proyecto. Si este archivo contradice la Constitución, prevalece la Constitución y esta documentación debe actualizarse.
+
 Actuá como arquitecto de sistemas de trazabilidad industrial con experiencia en normativas ISO 9001, ISO 27001 e IRAM. Voy a describirte el proceso de mi empresa y necesito que me ayudes a diseñar un sistema completo, profesional y auditable.
 
 — CONTEXTO DEL PROCESO —
