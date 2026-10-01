@@ -106,6 +106,7 @@ export default function VistaRecontrol({ t, currentUser }) {
   const [activoId, setActivoId] = useState(null);
   const [form, setForm] = useState(emptyPlanilla());
   const [guardado, setGuardado] = useState(false);
+  const [mensajeGuardado, setMensajeGuardado] = useState('');
   const [cargando, setCargando] = useState(true);
   const [errorCarga, setErrorCarga] = useState(null);
   const [guardando, setGuardando] = useState(false);
@@ -156,6 +157,7 @@ export default function VistaRecontrol({ t, currentUser }) {
     setActivoId(r.id);
     setForm(emptyPlanilla());
     setGuardado(false);
+    setMensajeGuardado('');
     setErrorOp(null);
   };
   const hF = (k,v) => setForm(f=>({...f,[k]:v}));
@@ -177,21 +179,23 @@ export default function VistaRecontrol({ t, currentUser }) {
     if(!formValido||!activo) return;
     setErrorOp(null); setGuardando(true);
     try {
-      await apiGuardarRecontrol({
+      const res = await apiGuardarRecontrol({
         noConformidadId: activo.id,
-        controlCalidadId: activo.control_calidad_id,
         accionPrevia: form.accion_previa,
         reinspeccionados: total,
         descartados: desc,
-        resultado,
-        kgMerma: merma,
         esFinal: form.es_final,
         observaciones: form.observaciones,
         defectosIds: form.defectos,
       });
       setGuardado(true);
+      setMensajeGuardado(
+        res?.cierre_pendiente
+          ? 'Recontrol definitivo registrado · NC pendiente de cierre por supervisor/inspector'
+          : 'Recontrol guardado · continúa pendiente'
+      );
       setTimeout(async ()=>{
-        setActivoId(null); setGuardado(false);
+        setActivoId(null); setGuardado(false); setMensajeGuardado('');
         await cargar();           // refresca cola y recontrolados desde la DB
       },1100);
     } catch(e){ setErrorOp(e.message); setGuardando(false); return; }
@@ -453,7 +457,7 @@ export default function VistaRecontrol({ t, currentUser }) {
             </div>
           )}
           <button style={{...S.btnGuardar,...(!formValido?S.btnDis:{}),...(guardado?{background:t.success}:{})}} onClick={guardar} disabled={!formValido}>
-            {guardando ? <><Loader2 size={16}/> Guardando…</> : guardado ? <><Check size={16}/> Recontrol guardado</> : <><Save size={16}/> Guardar recontrol</>}
+            {guardando ? <><Loader2 size={16}/> Guardando…</> : guardado ? <><Check size={16}/> {mensajeGuardado || 'Recontrol guardado'}</> : <><Save size={16}/> Guardar recontrol</>}
           </button>
         </div>
       </div>
