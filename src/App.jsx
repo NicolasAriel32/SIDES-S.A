@@ -1126,6 +1126,12 @@ const dataService = {
           id, numero_secuencial, id_maquina, operario_legajo,
           observaciones, cantidad_cabezales_afectados, timestamp_recibida,
           fallas:pruebas_fallas(tipo_falla_id)
+        ),
+        control_calidad:controles_calidad!control_calidad_id(
+          id, id_maquina, nombre_producto, numero_lote,
+          cantidad_rechazo, caja_desde, caja_hasta,
+          inspector_legajo, inspector_nombre, observacion_libre,
+          controles_defectos(tipo_falla_id)
         )
       `)
       .order('created_at', { ascending: false })
@@ -1137,8 +1143,9 @@ const dataService = {
 
     return (data || []).map(nc => {
       const p = nc.prueba || {}
-      // FIX v5: normalizamos a UTC; antes el desfase era de N horas porque
-      // PostgREST manda timestamps sin Z y JS los parseaba como hora local.
+      const cc = nc.control_calidad || {}
+      const esCalidad = !!nc.control_calidad_id
+
       const aperturaUTC  = normalizarFechaUTC(nc.timestamp_apertura || nc.created_at)
       const tomadaUTC    = normalizarFechaUTC(nc.timestamp_analisis)
       const cierreUTC    = normalizarFechaUTC(nc.timestamp_cierre)
@@ -1156,29 +1163,39 @@ const dataService = {
         id:                `NC-${String(nc.numero_nc).padStart(6,'0')}`,
         supabase_id:       nc.id,
         numeroNC:          nc.numero_nc,
+        origen:            esCalidad ? 'CALIDAD' : 'ESTANQUEIDAD',
         pruebaId:          codigoPrueba,
         pruebaSupabaseId:  nc.prueba_id,
-        maquina:           p.id_maquina,
-        operario:          usuariosMap.get(p.operario_legajo) || p.operario_legajo || '',
-        operarioLegajo:    p.operario_legajo,
-        tipos:             p.fallas?.map(f => f.tipo_falla_id) || [],
-        cabezalesFalla:    p.cantidad_cabezales_afectados ?? 0,
-        observaciones:     p.observaciones,
+        controlCalidadId:  nc.control_calidad_id,
+        maquina:           p.id_maquina || cc.id_maquina || '',
+        producto:          cc.nombre_producto || '',
+        lote:              cc.numero_lote || '',
+        operario:          usuariosMap.get(p.operario_legajo) || p.operario_legajo || cc.inspector_nombre || '',
+        operarioLegajo:    p.operario_legajo || cc.inspector_legajo || '',
+        tipos:             p.fallas?.map(f => f.tipo_falla_id)
+                            || cc.controles_defectos?.map(f => f.tipo_falla_id)
+                            || [],
+        cabezalesFalla:    p.cantidad_cabezales_afectados
+                            ?? ((cc.cantidad_rechazo || 0) * 336),
+        cantidadRechazo:   cc.cantidad_rechazo ?? null,
+        cajaDesde:         cc.caja_desde ?? null,
+        cajaHasta:         cc.caja_hasta ?? null,
+        observaciones:     p.observaciones || cc.observacion_libre || '',
         estado:            nc.estado,
         supervisorLegajo:  nc.supervisor_legajo,
         tomadaPor:         supervisorNombre,
         tomadaAt:          tomadaUTC,
         cerradaPor:        supervisorNombre,
         cerradaAt:         cierreUTC,
-        causaRaiz:              nc.causa_raiz,
-        accionesTomadas:        nc.acciones_tomadas || [],
-        notasCierre:            nc.notas_cierre,
-        diasParaCierre:         nc.dias_para_cierre,
-        legajoCierre:           nc.legajo_cierre,
-        cabezalesVerificados:   nc.cabezales_verificados ?? null,
-        kgMerma:                nc.kg_merma ?? null,
-        timestamp:              aperturaUTC,
-        aperturaAt:             aperturaUTC
+        causaRaiz:         nc.causa_raiz,
+        accionesTomadas:   nc.acciones_tomadas || [],
+        notasCierre:       nc.notas_cierre,
+        diasParaCierre:    nc.dias_para_cierre,
+        legajoCierre:      nc.legajo_cierre,
+        cabezalesVerificados: nc.cabezales_verificados ?? null,
+        kgMerma:           nc.kg_merma ?? null,
+        timestamp:         aperturaUTC,
+        aperturaAt:        aperturaUTC
       }
     })
   },
