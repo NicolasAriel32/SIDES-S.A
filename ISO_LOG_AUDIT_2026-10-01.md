@@ -255,3 +255,33 @@ Para auditoría se considera de mayor fuerza:
 4. checkpoint/anclaje externo y backup recuperable.
 
 Los eventos SEMANTIC_RPC son contexto útil, pero no sustituyen la evidencia automática de una modificación real.
+
+
+## 9. Avance posterior de remediación
+
+### Monitoreo automático de integridad
+Se implementó `audit_integrity_checks` como registro append-only y `run_audit_integrity_check()`.
+
+La verificación se ejecuta diariamente mediante `pg_cron` a las 05:15 UTC (02:15 Argentina). La primera ejecución quedó registrada con estado **OK**, snapshot legacy válido, 0 hashes v2 inválidos y 0 cortes de cadena.
+
+Si una comprobación falla:
+- se registra `FAIL` en la tabla de controles;
+- se agrega `AUDIT_INTEGRITY_FAIL` al audit_log;
+- PostgreSQL emite un WARNING.
+
+Esto proporciona detección persistente dentro de la base, pero todavía no constituye una alerta externa.
+
+### Cobertura crítica ampliada
+La auditoría DB-trigger se amplió a 24 tablas críticas. Además de pruebas/NC/usuarios/calibraciones y Calidad/Recontrol, ahora cubre configuración y trazabilidad complementaria como máquinas, tipos de falla, especificaciones de producto, clientes, lotes, cajas, pruebas_fallas, inspectores, profiles, observaciones y turnos.
+
+`mensajes` queda fuera deliberadamente por no formar parte de la evidencia crítica de producción/calidad y para evitar registrar contenido de comunicación sin una necesidad definida.
+
+### Backup y recuperación
+Se agregó:
+- `BACKUP_RECOVERY_PLAN.md`;
+- `RESTORE_TEST_TEMPLATE.md`;
+- workflow manual `.github/workflows/manual-offsite-backup.yml`.
+
+El workflow está deliberadamente **sin programación automática**. Requiere primero configurar secretos, ejecutar un backup cifrado hacia un destino separado, restaurarlo en un entorno aislado y documentar una prueba aprobada. Sólo después corresponde habilitar una frecuencia automática.
+
+El flujo previsto genera también un `audit-anchor` externo con la cabeza de la cadena v2, aportando una referencia de integridad fuera de Supabase.
