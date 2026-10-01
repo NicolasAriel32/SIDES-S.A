@@ -56,3 +56,17 @@ Se eligió la opción B: todo operario o supervisor habilitado para recontrol pu
 
 ## Recontrol por jornada
 Se confirmó que cada registro de recontrol debe capturar únicamente la cantidad realmente reinspeccionada durante esa jornada/turno, no el total acumulado manualmente. Supabase calcula el acumulado y el pendiente. No permite superar el objetivo original del rechazo y sólo acepta marcar un recontrol como definitivo cuando el acumulado alcanza exactamente el total a recontrolar. La merma, recuperados y resultado se calculan sobre la cantidad de esa jornada.
+
+
+## Instrucciones supervisor → operario
+
+La revisión del flujo de estanqueidad detectó que `observaciones_update` permitía al operario destinatario ejecutar UPDATE sobre la fila completa. Aunque la UI sólo cambiaba `leida/leida_at/leida_por`, un cliente manipulado podía intentar modificar el texto de la instrucción u otros metadatos.
+
+Corrección aplicada:
+- revocado UPDATE/DELETE/TRUNCATE directo sobre `observaciones`;
+- el contenido de una observación queda inmutable por trigger;
+- el acuse de recibo se realiza mediante `marcar_observacion_leida()`;
+- la identidad del operario se deriva de `auth.uid()`;
+- el acuse no puede revertirse.
+
+Esto es especialmente relevante para la instrucción estructurada `REVISAR UNA CAJA AL 100%`, porque la evidencia debe demostrar qué pidió el supervisor y que el operario destinatario recibió esa instrucción.
