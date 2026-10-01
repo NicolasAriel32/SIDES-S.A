@@ -326,6 +326,9 @@ export async function fetchRechazosPendientes() {
     caja_desde: nc.caja_desde != null ? String(nc.caja_desde) : '',
     caja_hasta: nc.caja_hasta != null ? String(nc.caja_hasta) : '',
     cantidad_rechazo: nc.cantidad_rechazo || 0,
+    objetivo_total: Number(nc.objetivo_total || 0),
+    recontrolados_acumulados: Number(nc.recontrolados_acumulados || 0),
+    pendientes: Number(nc.pendientes || 0),
     defectos: Array.isArray(nc.defectos) ? nc.defectos : [],
     observacion: nc.observacion_libre || '',
   }))
