@@ -1,0 +1,21 @@
+-- Quality specification snapshot + server-side dimensional evaluation
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Confirmed business rule:
+--   LARGO = largo del cabezal.
+--   Acceptance tolerance = nominal +/- 2 mm for the product being produced.
+--
+-- Changes:
+--   * corrected RCL-300C-AZ largo_nom_mm from 310 to 300
+--     (existing limits 298..302 were already consistent with nominal 300);
+--   * added DB CHECK enforcing largo_min/max = nominal +/- 2 mm;
+--   * added controles_calidad.especificacion_snapshot and
+--     especificacion_capturada_at for future controls;
+--   * guardar_control_calidad() now validates complete sample count and
+--     computes fuera_rango in PostgreSQL from the specification;
+--   * browser-supplied fuera_rango/unit values are no longer trusted.
+--
+-- Historical controls/measurements were NOT recalculated or rewritten.
+--
+-- Authoritative implementation:
+-- Supabase migration quality_spec_snapshot_and_server_range_evaluation
