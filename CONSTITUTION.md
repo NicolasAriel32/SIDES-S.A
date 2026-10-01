@@ -63,6 +63,16 @@ Esta Constitución expresa **qué debe ser verdad en el sistema**. Si una pantal
 3. Un control no conforme puede originar una No Conformidad de Calidad.
 4. Las NC originadas en Calidad deben conservar su vínculo con el control que las generó.
 
+
+## 4.1 Fuente de verdad de Control de Calidad
+
+1. Todo Control de Calidad nuevo debe estar asociado a una `orden_maquina`.
+2. Para un control nuevo, máquina, producto, lote, cliente y especificación se derivan server-side de la orden; no se confía en copias enviadas por el navegador.
+3. Una NC tiene exactamente un origen: prueba de estanqueidad o Control de Calidad.
+4. En un rechazo por rango de cajas, `cantidad_rechazo = caja_hasta - caja_desde + 1`.
+5. Un recontrol debe conservar el mismo `control_calidad_id` que la NC que lo originó.
+6. Una merma de origen RECONTROL debe quedar vinculada al recontrol y a su NC; no puede existir más de una merma automática para el mismo recontrol.
+
 ## 5. Recontrol de rechazos
 
 ### 5.1 Quién puede hacerlo
