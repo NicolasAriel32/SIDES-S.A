@@ -9,6 +9,12 @@ El sistema debe registrar y hacer trazables las pruebas de estanqueidad, los con
 
 Esta Constitución expresa **qué debe ser verdad en el sistema**. Si una pantalla, función, migración o documento contradice estas reglas, la implementación debe revisarse: la contradicción no se resuelve inventando una nueva regla.
 
+## 1.1 Base normativa confirmada
+
+- Dato de negocio confirmado por Nicolás el 2026-10-01: SIDES S.A. está certificada contra **ISO 9001:2026**.
+- Las decisiones de trazabilidad, registros, no conformidades, medición, evidencia y auditoría del sistema deben evaluarse contra esa edición como baseline de calidad.
+- Las referencias anteriores a ISO 9001:2015 quedan como contexto histórico y no como baseline vigente del proyecto.
+
 ## 2. Principios globales
 
 1. **Las reglas críticas viven en infraestructura, no sólo en la UI.** Roles, permisos, identidad, validaciones y transiciones sensibles deben controlarse en Supabase/PostgreSQL además del frontend.
