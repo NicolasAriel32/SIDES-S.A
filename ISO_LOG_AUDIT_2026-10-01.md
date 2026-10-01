@@ -241,9 +241,10 @@ Cargar y validar registros reales cuando el proceso formal de calibración/verif
 
 Confirmado: SIDES S.A. está certificada contra ISO 9001:2026.
 
-Pendientes:
-1. ¿SIDES tiene certificación ISO/IEC 27001:2022, o este sistema sólo busca alineación con ese marco?
-2. ¿Cuál es el plazo formal de conservación de registros de calidad/trazabilidad en SIDES? Si no existe, debe definirlo Calidad antes de crear una política automática de retención.
+Confirmado por Nicolás (2026-10-01): SIDES S.A. también está certificada contra ISO/IEC 27001:2022. A partir de esta fecha, los controles de acceso, logging, monitoreo, integridad, respaldo y preservación de evidencia del sistema se evalúan contra ese baseline de seguridad.
+
+Pendiente:
+1. ¿Cuál es el plazo formal de conservación de registros de calidad/trazabilidad en SIDES? Si no existe, debe definirlo Calidad antes de crear una política automática de retención.
 
 ## 8. Regla de evidencia
 
