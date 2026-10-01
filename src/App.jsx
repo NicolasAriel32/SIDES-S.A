@@ -1070,19 +1070,14 @@ const dataService = {
     return (data || []).map(o => this._mapObs(o))
   },
 
-  async markObservationAsRead(obsId, operario) {
-    const { data, error } = await supabase
-      .from('observaciones')
-      .update({
-        leida:    true,
-        leida_at: new Date().toISOString(),
-        leida_por: operario
-      })
-      .eq('id', obsId)
+  async markObservationAsRead(obsId) {
+    const { data, error } = await supabase.rpc('marcar_observacion_leida', {
+      p_observacion_id: obsId,
+    })
 
-    console.log('markObservationAsRead supabase response:', { obsId, operario, data, error })
+    console.log('markObservationAsRead rpc:', { obsId, ok: data?.ok === true, error })
     if (error) { console.error('markAsRead:', error); return false }
-    return true
+    return data?.ok === true
   },
 
   async getAllUnreadObservations() {
