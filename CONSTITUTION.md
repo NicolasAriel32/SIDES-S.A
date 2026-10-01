@@ -73,6 +73,34 @@ Esta Constitución expresa **qué debe ser verdad en el sistema**. Si una pantal
 5. Un recontrol debe conservar el mismo `control_calidad_id` que la NC que lo originó.
 6. Una merma de origen RECONTROL debe quedar vinculada al recontrol y a su NC; no puede existir más de una merma automática para el mismo recontrol.
 
+
+## 4.2 Medición de LARGO y especificación vigente
+
+1. `LARGO` significa **largo del cabezal**.
+2. El criterio dimensional confirmado es **medida nominal del cabezal ± 2 mm** para el producto que se está produciendo.
+3. Para controles nuevos, el resultado `fuera_rango` se calcula en PostgreSQL a partir de la especificación vigente; no se confía en un booleano enviado por el navegador.
+4. Cada Control de Calidad nuevo conserva un snapshot de la especificación utilizada (nominal, mínimos/máximos y cantidad de muestra).
+5. Una modificación posterior del maestro de especificaciones no debe cambiar retrospectivamente la evidencia de un control ya realizado.
+6. No se recalculan controles históricos que no poseen snapshot de especificación.
+7. La tolerancia dimensional del producto no debe confundirse con la calibración/verificación metrológica del instrumento de medición; esta última requiere evidencia propia cuando corresponda.
+
+## 4.3 Orden de trabajo, lote y caja en estanqueidad
+
+1. El encargado entrega físicamente una **orden de trabajo impresa**.
+2. El lote se toma de esa orden y se carga manualmente **una vez al iniciar/cambiar la orden**, manteniéndose vigente hasta que esa orden termina o es reemplazada.
+3. El lote no debería volver a escribirse libremente en cada prueba cuando ya existe una orden activa: debe derivarse de la orden vigente una vez que el flujo digital de órdenes esté consolidado.
+4. La caja es dinámica: para cada prueba de estanqueidad el operario mira la **etiqueta de la caja actual** y carga su identificación en el sistema.
+5. La caja registrada en la prueba representa la caja física sobre la cual se referencia esa prueba en ese momento.
+6. Los datos históricos de caja/lote que hoy existen sólo como texto no se normalizan automáticamente sin evidencia suficiente.
+
+## 4.4 Rechazo de estanqueidad y segregación física
+
+1. Cuando una prueba de estanqueidad presenta falla, el supervisor investiga hacia atrás hasta identificar desde qué caja considera que comienza el tramo afectado y toma como extremo la caja actual inspeccionada.
+2. El material afectado se **segrega físicamente**: el pallet se separa del flujo normal.
+3. Hoy esa segregación se documenta en una **manila/papel** que incluye, como mínimo, falla detectada, responsable/supervisor, máquina, turno y cantidad de cajas afectadas.
+4. El sistema digital debe poder reconstruir ese rango y su segregación sin borrar la evidencia física existente durante la transición.
+5. El comportamiento anterior de marcar un rechazo de estanqueidad simplemente como `REVISADO` sin registrar la segregación no se considera suficiente como estado final de trazabilidad.
+
 ## 5. Recontrol de rechazos
 
 ### 5.1 Quién puede hacerlo
