@@ -303,46 +303,41 @@ export async function guardarControl({
 // =================================================================
 // RECONTROL
 // =================================================================
-/** NCs abiertas/en análisis originadas en control de calidad → cola de recontrol. */
+/** NCs abiertas/en análisis originadas en control de calidad → cola de recontrol.
+ *  La visibilidad la resuelve una RPC server-side: operario/supervisor/inspector
+ *  ven todos los rechazos pendientes generados por Calidad, sin depender de la
+ *  máquina asignada.
+ */
 export async function fetchRechazosPendientes() {
-  const { data, error } = await supabase
-    .from('no_conformidades')
-    .select(`
-      id, numero_nc, estado, timestamp_apertura,
-      controles_calidad!no_conformidades_control_calidad_id_fkey (
-        id, id_maquina, nombre_producto, numero_lote, cliente, clientes(nombre),
-        caja_desde, caja_hasta, cantidad_rechazo,
-        inspector_nombre, observacion_libre, fecha_hora,
-        controles_defectos(tipo_falla_id, tipos_falla(nombre))
-      )
-    `)
-    .not('control_calidad_id', 'is', null)
-    .in('estado', ['ABIERTA', 'EN ANALISIS'])
-    .order('timestamp_apertura', { ascending: true })
+  const { data, error } = await supabase.rpc('recontrol_pendientes')
   throwIf(error, 'fetchRechazosPendientes')
-  return (data || [])
-    .filter(nc => nc.controles_calidad)
-    .map(nc => {
-      const c = nc.controles_calidad
-      return {
-        id: nc.id,
-        numero: nc.numero_nc,
-        estado: 'PENDIENTE',
-        estado_nc: nc.estado,
-        control_calidad_id: c.id,
-        fecha_apertura: `${fmtFecha(nc.timestamp_apertura)} ${fmtHora(nc.timestamp_apertura)}`,
-        inspector_abrio: c.inspector_nombre || '—',
-        id_maquina: c.id_maquina,
-        producto: c.nombre_producto,
-        lote: c.numero_lote,
-        cliente: c.cliente || c.clientes?.nombre || '',
-        caja_desde: c.caja_desde != null ? String(c.caja_desde) : '',
-        caja_hasta: c.caja_hasta != null ? String(c.caja_hasta) : '',
-        cantidad_rechazo: c.cantidad_rechazo || 0,
-        defectos: (c.controles_defectos || []).map(d => d.tipos_falla?.nombre || d.tipo_falla_id),
-        observacion: c.observacion_libre || '',
-      }
-    })
+  return (data || []).map(nc => ({
+    id: nc.id,
+    numero: nc.numero_nc,
+    estado: 'PENDIENTE',
+    estado_nc: nc.estado,
+    control_calidad_id: nc.control_calidad_id,
+    fecha_apertura: `${fmtFecha(nc.timestamp_apertura)} ${fmtHora(nc.timestamp_apertura)}`,
+    inspector_abrio: nc.inspector_nombre || '—',
+    id_maquina: nc.id_maquina,
+    producto: nc.nombre_producto,
+    lote: nc.numero_lote,
+    cliente: nc.cliente || '',
+    caja_desde: nc.caja_desde != null ? String(nc.caja_desde) : '',
+    caja_hasta: nc.caja_hasta != null ? String(nc.caja_hasta) : '',
+    cantidad_rechazo: nc.cantidad_rechazo || 0,
+    defectos: Array.isArray(nc.defectos) ? nc.defectos : [],
+    observacion: nc.observacion_libre || '',
+  }))
+}
+
+export async function fetchDefectosRecontrol() {
+  const { data, error } = await supabase
+    .from('tipos_falla')
+    .select('id, nombre, gravedad')
+    .order('nombre')
+  throwIf(error, 'fetchDefectosRecontrol')
+  return data || []
 }
 
 /** Recontroles ya hechos hoy (para la sección "recontrolados"). */
