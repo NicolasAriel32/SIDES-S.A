@@ -3890,17 +3890,135 @@ const VistaSupervisor = ({ t, currentUser }) => {
                 )}
               </div>
             </div>
-            {/* v7: ya no se abren NC desde estanqueidad — los rechazos se gestionan
-                en el módulo de Control de Calidad. Acá queda asentado el registro
-                de la falla del operario y el aviso del supervisor/inspector. */}
+            <div style={{ marginBottom: 10, fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>
+              La falla informada por el operario es una señal. El rechazo/NC sólo existe si el supervisor lo determina.
+            </div>
+
+            {enAprobacion.estadoFinal === 'REVISION_100_CAJA' && (
+              <div style={{
+                marginBottom: 10, padding: '8px 10px', borderRadius: 6,
+                background: t.warnSoft, border: `1px solid ${t.warn}50`,
+                color: t.warn, fontFamily: 'Manrope', fontSize: 12
+              }}>
+                Revisión de la caja actual al 100% solicitada · la línea puede continuar mientras se verifica.
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <ButtonSm t={t} onClick={() => setObservarTest(enAprobacion)}>
-                <MessageSquare size={12} /> Observar
+                <MessageSquare size={12} /> Observación
               </ButtonSm>
-              <ButtonSm t={t} variant="warn" grow onClick={marcarLeidoAprobacion}>
-                <Eye size={12} /> Marcar como leído y quitar de la cola
+
+              <ButtonSm
+                t={t}
+                variant="accent"
+                disabled={decisionLoading || enAprobacion.estadoFinal === 'REVISION_100_CAJA'}
+                onClick={pedirRevision100}
+              >
+                <Eye size={12} /> Revisar caja al 100%
+              </ButtonSm>
+
+              <ButtonSm t={t} variant="warn" disabled={decisionLoading} onClick={decidirSinRechazo}>
+                <Check size={12} /> Sin rechazo / cerrar aviso
+              </ButtonSm>
+
+              <ButtonSm
+                t={t}
+                variant="danger"
+                disabled={decisionLoading}
+                onClick={() => { setMostrarFormNC(v => !v); setDecisionError(''); }}
+              >
+                <AlertTriangle size={12} /> Generar NC y segregar
               </ButtonSm>
             </div>
+
+            {mostrarFormNC && (
+              <div style={{
+                marginTop: 14, padding: 14, background: t.surface,
+                border: `1px solid ${t.border}`, borderRadius: 8
+              }}>
+                <div style={{
+                  fontFamily: 'Bricolage Grotesque', fontSize: 14,
+                  fontWeight: 600, color: t.text, marginBottom: 10
+                }}>
+                  No Conformidad oficial · manila digital
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                  <div>
+                    <Label t={t}>Caja desde</Label>
+                    <Input
+                      t={t}
+                      value={ncCajaDesde}
+                      onChange={e => setNcCajaDesde(e.target.value)}
+                      placeholder="Caja donde comienza el tramo"
+                    />
+                  </div>
+
+                  <div>
+                    <Label t={t}>Caja hasta</Label>
+                    <div style={{
+                      padding: '10px 12px', borderRadius: 6,
+                      background: t.surfaceHi, border: `1px solid ${t.border}`,
+                      color: t.text, fontFamily: 'JetBrains Mono', fontSize: 12
+                    }}>
+                      {enAprobacion.caja || 'Sin caja registrada'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label t={t}>Cantidad de cajas</Label>
+                    <Input
+                      t={t}
+                      type="number"
+                      min="1"
+                      value={ncCantidadCajas}
+                      onChange={e => setNcCantidadCajas(e.target.value)}
+                      placeholder="Ej: 4"
+                    />
+                  </div>
+                </div>
+
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 8, marginTop: 12,
+                  fontFamily: 'Manrope', fontSize: 12, color: t.text, cursor: 'pointer'
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={ncSegregada}
+                    onChange={e => setNcSegregada(e.target.checked)}
+                  />
+                  Confirmo que el pallet/material afectado quedó segregado físicamente
+                </label>
+
+                {decisionError && (
+                  <div style={{
+                    marginTop: 10, color: t.danger,
+                    fontFamily: 'Manrope', fontSize: 12
+                  }}>
+                    {decisionError}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                  <ButtonSm t={t} onClick={() => setMostrarFormNC(false)} disabled={decisionLoading}>
+                    Cancelar
+                  </ButtonSm>
+                  <ButtonSm t={t} variant="danger" onClick={generarNCEstanqueidad} disabled={decisionLoading}>
+                    <FileCheck size={12} /> {decisionLoading ? 'Registrando…' : 'Crear NC oficial'}
+                  </ButtonSm>
+                </div>
+              </div>
+            )}
+
+            {!mostrarFormNC && decisionError && (
+              <div style={{
+                marginTop: 10, color: t.danger,
+                fontFamily: 'Manrope', fontSize: 12
+              }}>
+                {decisionError}
+              </div>
+            )}
           </div>
         </Card>
       )}
