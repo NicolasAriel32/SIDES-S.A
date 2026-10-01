@@ -1,0 +1,18 @@
+-- =====================================================================
+-- Recontrol por jornada y progreso acumulado
+-- Aplicado en Supabase: 2026-10-01
+--
+-- Regla de negocio confirmada:
+--   • Cada intento registra la cantidad realmente recontrolada en esa jornada.
+--   • El sistema acumula automáticamente lo ya recontrolado.
+--   • No se puede superar el total original rechazado.
+--   • Un intento puede marcarse definitivo sólo cuando el acumulado completa
+--     exactamente el total objetivo.
+--   • El recontrol definitivo NO cierra la NC; queda pendiente de cierre por
+--     supervisor o inspector.
+--
+-- La implementación efectiva está en las funciones:
+--   guardar_recontrol(jsonb)
+--   recontrol_pendientes()
+-- y en el historial de migraciones de Supabase.
+-- =====================================================================
