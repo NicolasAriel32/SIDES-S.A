@@ -195,3 +195,35 @@ Hasta confirmar esos puntos:
 - no crear automáticamente lotes/cajas históricos;
 - no inventar calibraciones;
 - impedir nuevas inconsistencias cuando la regla ya está confirmada.
+
+
+## 11. Reglas de proceso confirmadas posteriormente
+
+### LARGO
+Se confirmó que LARGO es el largo del cabezal y que el criterio dimensional del producto es nominal ±2 mm.
+
+Se detectó un dato maestro inconsistente:
+- `RCL-300C-AZ`: nominal figuraba 310 mm mientras sus límites eran 298–302 mm.
+
+Se corrigió exclusivamente el nominal a 300 mm. El cambio quedó registrado en `audit_log` como `DB_TRIGGER`, conservando before/after. No se alteraron mediciones históricas.
+
+Para controles futuros se implementó snapshot de especificación y evaluación server-side de rango.
+
+### Orden impresa y lote
+El encargado entrega una orden de trabajo impresa. El lote se lee de esa orden y se carga una sola vez al iniciar/cambiar la orden. Permanece vigente hasta terminar/cambiar la orden.
+
+La arquitectura futura de estanqueidad debe reflejar esta fuente de verdad en vez de pedir el lote libremente en cada prueba.
+
+### Caja
+La caja sí cambia durante producción. Para la prueba de estanqueidad, el operario consulta la etiqueta de la caja actual y carga ese número para relacionar la prueba con el material físico presente.
+
+### Rechazo de estanqueidad
+El proceso físico real incluye:
+- supervisor identifica desde qué caja hacia atrás considera que comenzó la falla;
+- el extremo final es la caja actual tomada para control;
+- se separa físicamente el pallet;
+- se completa una manila en papel con falla, responsable, máquina, turno y cantidad de cajas, entre otros datos.
+
+Este hallazgo confirma que `REVISADO sin NC/segregación` no captura por sí solo el tratamiento físico del producto no conforme.
+
+Queda por definir antes de cambiar ese flujo si la manila es formalmente la No Conformidad de SIDES o si es un registro de segregación/bloqueo que luego puede originar una NC distinta.
