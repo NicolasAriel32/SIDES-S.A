@@ -768,19 +768,6 @@ const dataService = {
     throw new Error('saveTests no implementado — usar createTest/updateTest')
   },
 
-  // Obtiene el siguiente numero_secuencial via secuencia DB (atómico, no filtrado por RLS).
-  // La función next_numero_secuencial() es SECURITY DEFINER — evita el bug donde
-  // operarios sin pruebas previas en su máquina obtenían MAX=0 → secuencial=1 → 409.
-  async _siguienteNumeroSecuencial() {
-    const { data, error } = await supabase.rpc('next_numero_secuencial')
-    if (error) {
-      console.error('_siguienteNumeroSecuencial rpc:', error)
-      // Fallback: sumar 1 al maximo global via función separada si el RPC falla
-      return Date.now() // timestamp como fallback de emergencia (evita colisión)
-    }
-    return data
-  },
-
   async createTest(test) {
     // 1) Verificar que la máquina exista (id_maquina es FK varchar)
     const { data: maquina, error: maquinaError } = await supabase
@@ -796,9 +783,9 @@ const dataService = {
       this._ultimoError = maquinaError?.message || `máquina ${test.maquina} no encontrada`
       return null
     }
-// 2) Turno actual y número secuencial
+// 2) Turno actual. El numero_secuencial lo asigna PostgreSQL mediante
+    // DEFAULT nextval(...); el cliente no consume la secuencia directamente.
     const turnoId = await this.getTurnoActualId()
-    const numeroSec = await this._siguienteNumeroSecuencial()
 
     // 3) Mapeo de estado del modelo interno → resultado/estado_final del schema
     // v6: si es auto-PENDIENTE (60 min sin carga), resultado queda null y estado_final='PENDIENTE'
@@ -811,7 +798,6 @@ const dataService = {
     const { data: prueba, error } = await supabase
       .from('pruebas')
       .insert({
-        numero_secuencial:            numeroSec,
         id_maquina:                   test.maquina,
         fecha_hora:                   test.fechaSenal || new Date().toISOString(),
         codigo_producto:              test.codigoProducto,
@@ -855,6 +841,8 @@ const dataService = {
       this._ultimoError = error.message
       return null
     }
+
+    const numeroSec = prueba.numero_secuencial
 
     // 5) Si hay fallas, insertarlas en pruebas_fallas con tipo_falla_id
     if (test.tipos && test.tipos.length > 0) {
