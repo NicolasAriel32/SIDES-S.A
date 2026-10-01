@@ -14,7 +14,8 @@ import {
    Conectado a Supabase: la cola sale de no_conformidades
    (estado ABIERTA / EN ANALISIS, origen control de calidad) y el
    guardado usa la RPC guardar_recontrol (recontrol + defectos +
-   cierre/avance de la NC). Recuperados = total − descartados.
+   cierre/avance de la NC). Cada intento registra lo recontrolado en esa
+   jornada/turno; recuperados = recontrolados_jornada − descartados.
    ================================================================= */
 
 const CABEZALES_POR_CAJA = 336;
@@ -35,7 +36,7 @@ const calcResultado = (total, desc) => {
 };
 
 const emptyPlanilla = () => ({
-  accion_previa:'', descartados:'',
+  accion_previa:'', reinspeccionados:'', descartados:'',
   defectos:[], es_final:false, observaciones:'',
 });
 
@@ -163,17 +164,26 @@ export default function VistaRecontrol({ t, currentUser }) {
   const hF = (k,v) => setForm(f=>({...f,[k]:v}));
   const toggleDef = d => setForm(f=>({...f,defectos:f.defectos.includes(d)?f.defectos.filter(x=>x!==d):[...f.defectos,d]}));
 
-  // Total automático: cajas rechazadas × cabezales por caja (336 por defecto,
-  // a futuro según la medida del producto). El responsable autenticado carga las malas.
-  const total = activo ? activo.cantidad_rechazo * CABEZALES_POR_CAJA : 0;
+  // El objetivo total viene del rechazo original. Cada registro guarda sólo
+  // lo trabajado en esta jornada; el acumulado y el pendiente los calcula DB.
+  const total = activo ? (activo.objetivo_total || activo.cantidad_rechazo * CABEZALES_POR_CAJA) : 0;
+  const acumuladoPrevio = activo ? (activo.recontrolados_acumulados || 0) : 0;
+  const pendienteAntes = activo ? (activo.pendientes ?? Math.max(total - acumuladoPrevio, 0)) : 0;
+  const jornada = parseInt(form.reinspeccionados);
   const desc  = parseInt(form.descartados);
-  const recuperados = (total>0 && !isNaN(desc)) ? total-desc : null;
+  const recuperados = (!isNaN(jornada) && jornada>0 && !isNaN(desc)) ? jornada-desc : null;
   const merma = !isNaN(desc) ? desc*KG_POR_CABEZAL : null;
-  const resultado = calcResultado(total, desc);
-  const excede = total>0 && !isNaN(desc) && desc>total;
+  const resultado = calcResultado(jornada, desc);
+  const excedeDesc = !isNaN(jornada) && jornada>0 && !isNaN(desc) && desc>jornada;
+  const excedePendiente = !isNaN(jornada) && jornada>pendienteAntes;
+  const acumuladoProyectado = !isNaN(jornada) ? acumuladoPrevio + jornada : acumuladoPrevio;
+  const pendienteProyectado = !isNaN(jornada) ? Math.max(total - acumuladoProyectado, 0) : pendienteAntes;
+  const finalIncompleto = form.es_final && pendienteProyectado !== 0;
 
   const formValido = !!currentUser?.legajo && form.accion_previa
-    && total>0 && !isNaN(desc) && desc>=0 && !excede && !guardando;
+    && total>0 && !isNaN(jornada) && jornada>0 && jornada<=pendienteAntes
+    && !isNaN(desc) && desc>=0 && !excedeDesc && !excedePendiente
+    && !finalIncompleto && !guardando;
 
   const guardar = async () => {
     if(!formValido||!activo) return;
@@ -182,7 +192,7 @@ export default function VistaRecontrol({ t, currentUser }) {
       const res = await apiGuardarRecontrol({
         noConformidadId: activo.id,
         accionPrevia: form.accion_previa,
-        reinspeccionados: total,
+        reinspeccionados: jornada,
         descartados: desc,
         esFinal: form.es_final,
         observaciones: form.observaciones,
@@ -191,8 +201,8 @@ export default function VistaRecontrol({ t, currentUser }) {
       setGuardado(true);
       setMensajeGuardado(
         res?.cierre_pendiente
-          ? 'Recontrol definitivo registrado · NC pendiente de cierre por supervisor/inspector'
-          : 'Recontrol guardado · continúa pendiente'
+          ? `Recontrol definitivo registrado · ${res.recontrolados_acumulados}/${res.objetivo_total} · NC pendiente de cierre`
+          : `Jornada registrada · acumulado ${res.recontrolados_acumulados}/${res.objetivo_total} · faltan ${res.pendientes}`
       );
       setTimeout(async ()=>{
         setActivoId(null); setGuardado(false); setMensajeGuardado('');
@@ -244,6 +254,9 @@ export default function VistaRecontrol({ t, currentUser }) {
                   <div style={{fontSize:13,color:t.text,fontWeight:500}}>{r.id_maquina} · {r.producto}</div>
                   <div style={S.rechMeta}>Lote <span style={S.rechMetaStrong}>{r.lote}</span> · cajas {r.caja_desde}–{r.caja_hasta} ({r.cantidad_rechazo}) · <span style={{color:t.danger}}>{r.defectos.join(', ')}</span></div>
                   <div style={{...S.rechMeta,marginTop:2}}>Abierto por {r.inspector_abrio} · {r.fecha_apertura}</div>
+                  <div style={{...S.rechMeta,marginTop:2}}>
+                    Progreso: <span style={S.rechMetaStrong}>{r.recontrolados_acumulados}/{r.objetivo_total}</span> · pendientes {r.pendientes}
+                  </div>
                 </div>
               </div>
               <button style={S.btnRecontrolar} onClick={()=>abrir(r)}>Recontrolar <ArrowLeft size={14} style={{transform:'rotate(180deg)'}}/></button>
@@ -393,40 +406,83 @@ export default function VistaRecontrol({ t, currentUser }) {
           </div>
 
           <div style={{...S.campo,padding:'10px 12px',background:t.surfaceHi,borderRadius:6,marginBottom:14}}>
-            <span style={{fontSize:12,color:t.textMuted}}>Total a recontrolar (automático): </span>
-            <span style={{fontSize:14,fontWeight:600,color:t.text}}>{total} cabezales</span>
-            <span style={{fontSize:11,color:t.textDim}}> = {activo.cantidad_rechazo} caja(s) × {CABEZALES_POR_CAJA} cab.</span>
-          </div>
-          <div style={S.campo}>
-            <label style={S.label}>Descartados — solo las malas (van a merma y se reponen) <span style={S.req}>*</span></label>
-            <input style={{...S.input,...(excede?{borderColor:t.warn,background:t.warnSoft}:{})}} type="number" min="0" placeholder="0" value={form.descartados} onChange={e=>hF('descartados',e.target.value)}/>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10}}>
+              <div>
+                <span style={{display:'block',fontSize:10,color:t.textDim,textTransform:'uppercase'}}>Objetivo total</span>
+                <span style={{fontSize:16,fontWeight:600,color:t.text}}>{total}</span>
+              </div>
+              <div>
+                <span style={{display:'block',fontSize:10,color:t.textDim,textTransform:'uppercase'}}>Ya recontrolados</span>
+                <span style={{fontSize:16,fontWeight:600,color:t.success}}>{acumuladoPrevio}</span>
+              </div>
+              <div>
+                <span style={{display:'block',fontSize:10,color:t.textDim,textTransform:'uppercase'}}>Pendientes</span>
+                <span style={{fontSize:16,fontWeight:600,color:t.warn}}>{pendienteAntes}</span>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:t.textDim,marginTop:8}}>
+              {activo.cantidad_rechazo} caja(s) × {CABEZALES_POR_CAJA} cabezales
+            </div>
           </div>
 
-          {excede && (
-            <div style={S.alerta}><AlertTriangle size={14}/><span>No podés descartar más de lo reinspeccionado ({total}).</span></div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 16px'}}>
+            <div style={S.campo}>
+              <label style={S.label}>Recontrolados en esta jornada <span style={S.req}>*</span></label>
+              <input
+                style={{...S.input,...(excedePendiente?{borderColor:t.warn,background:t.warnSoft}:{})}}
+                type="number" min="1" max={pendienteAntes || undefined} placeholder="Ej: 350"
+                value={form.reinspeccionados} onChange={e=>hF('reinspeccionados',e.target.value)}
+              />
+            </div>
+            <div style={S.campo}>
+              <label style={S.label}>Descartados de esta jornada <span style={S.req}>*</span></label>
+              <input
+                style={{...S.input,...(excedeDesc?{borderColor:t.warn,background:t.warnSoft}:{})}}
+                type="number" min="0" max={!isNaN(jornada)?jornada:undefined} placeholder="0"
+                value={form.descartados} onChange={e=>hF('descartados',e.target.value)}
+              />
+            </div>
+          </div>
+
+          {excedePendiente && (
+            <div style={S.alerta}><AlertTriangle size={14}/><span>En esta jornada no podés registrar más de los {pendienteAntes} cabezales pendientes.</span></div>
+          )}
+          {excedeDesc && (
+            <div style={S.alerta}><AlertTriangle size={14}/><span>Los descartados no pueden superar lo recontrolado en esta jornada ({jornada}).</span></div>
+          )}
+          {finalIncompleto && (
+            <div style={S.alerta}><AlertTriangle size={14}/><span>Para marcarlo como terminado, el acumulado debe llegar a {total}. Con esta jornada quedarían {pendienteProyectado} pendientes.</span></div>
           )}
 
-          {/* Cálculo en vivo */}
+          {/* Cálculo en vivo de la jornada */}
           <div style={S.calcBox}>
             <div style={S.calcItem}>
-              <span style={{...S.calcNum,color:t.text}}>{total||'—'}</span>
-              <span style={S.calcLbl}>Total</span>
+              <span style={{...S.calcNum,color:t.text}}>{!isNaN(jornada)?jornada:'—'}</span>
+              <span style={S.calcLbl}>Jornada</span>
             </div>
             <div style={S.calcItem}>
               <span style={{...S.calcNum,color:t.success}}>{recuperados!=null&&recuperados>=0?recuperados:'—'}</span>
-              <span style={S.calcLbl}>Recuperados (buenos)</span>
+              <span style={S.calcLbl}>Recuperados jornada</span>
             </div>
             <div style={S.calcItem}>
               <span style={{...S.calcNum,color:t.danger}}>{!isNaN(desc)?desc:'—'}</span>
-              <span style={S.calcLbl}>Descartados = repuestos</span>
+              <span style={S.calcLbl}>Descartados jornada</span>
             </div>
             <div style={S.calcItem}>
               <span style={{...S.calcNum,color:t.warn}}>{merma!=null?merma.toFixed(3):'—'}</span>
-              <span style={S.calcLbl}>Merma (kg)</span>
+              <span style={S.calcLbl}>Merma jornada (kg)</span>
+            </div>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.text}}>{!isNaN(jornada)?acumuladoProyectado:acumuladoPrevio}</span>
+              <span style={S.calcLbl}>Acumulado</span>
+            </div>
+            <div style={S.calcItem}>
+              <span style={{...S.calcNum,color:t.warn}}>{!isNaN(jornada)?pendienteProyectado:pendienteAntes}</span>
+              <span style={S.calcLbl}>Quedarían</span>
             </div>
             <div style={{...S.calcItem,display:'flex',flexDirection:'column',justifyContent:'center',alignItems:'center'}}>
               {lbl ? <span style={{...S.pill,background:toneSoft(lbl.tone),color:tone(lbl.tone),border:`1px solid ${tone(lbl.tone)}40`}}>{lbl.txt}</span> : <span style={{color:t.textDim,fontSize:13}}>—</span>}
-              <span style={{...S.calcLbl,marginTop:6}}>Resultado (auto)</span>
+              <span style={{...S.calcLbl,marginTop:6}}>Resultado jornada</span>
             </div>
           </div>
 
