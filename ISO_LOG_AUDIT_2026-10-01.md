@@ -9,7 +9,7 @@ Este documento evalúa si el sistema aporta evidencia técnica útil para un SGC
 
 El proyecto fue concebido con alineación buscada a ISO 9001 / ISO 27001 / IRAM y con objetivo de ser auditable. La documentación original también vinculó el subsistema de calibraciones con ISO 9001 7.1.5.
 
-A octubre de 2026 ISO 9001:2026 ya fue publicada. El proyecto nació con referencias de ISO 9001:2015; antes de preparar evidencia de certificación hay que confirmar contra qué edición está certificado o auditado SIDES.
+Dato de negocio confirmado por Nicolás (2026-10-01): SIDES S.A. está certificada contra ISO 9001:2026. A partir de esta fecha, la auditoría técnica del sistema toma ISO 9001:2026 como referencia de calidad del proyecto. Las menciones históricas a ISO 9001:2015 se conservan sólo como contexto de desarrollo anterior.
 
 ## 2. Qué se encontró antes de la remediación actual
 
@@ -237,9 +237,12 @@ La cadena v2 actualmente tiene SHA-256 pero no HMAC. HMAC no es requisito univer
 P2 — Evidencia de calibración
 Cargar y validar registros reales cuando el proceso formal de calibración/verificación sea definido por Calidad/Mantenimiento.
 
-## 7. Dos decisiones de negocio todavía necesarias
+## 7. Decisiones de negocio todavía necesarias
 
-1. ¿Contra qué edición está certificada o se audita SIDES actualmente: ISO 9001:2015, transición a 9001:2026, otra?
+Confirmado: SIDES S.A. está certificada contra ISO 9001:2026.
+
+Pendientes:
+1. ¿SIDES tiene certificación ISO/IEC 27001:2022, o este sistema sólo busca alineación con ese marco?
 2. ¿Cuál es el plazo formal de conservación de registros de calidad/trazabilidad en SIDES? Si no existe, debe definirlo Calidad antes de crear una política automática de retención.
 
 ## 8. Regla de evidencia
