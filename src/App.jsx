@@ -153,7 +153,7 @@ const normalizeUserInput = (user) => ({
   apellido: user.apellido,
   email: user.email || '',                 // FIX: email es NOT NULL en DB
   rol: user.rol,
-  password: user.password || 'cambio123',  // se mapea a password_hash en mapUserToDb
+  password: user.password || '', // compatibilidad legacy; no se persiste
   forceChange: user.forceChange ?? user.force_change ?? user.fuerza_cambio ?? true,
   maquinaAsignada: user.maquinaAsignada ?? user.maquina_asignada ?? null,
   activo: user.activo ?? true,
@@ -300,8 +300,9 @@ const dataService = {
   },
 
   // Crea (o resetea) el usuario en Supabase Auth via función SECURITY DEFINER.
-  // Solo admins pueden llamarla. Contraseña por defecto: Cambio123!
-  async createAuthUser(legajo, password = 'Cambio123!') {
+    // Solo admins pueden llamarla. La contraseña temporal debe ser explícita y aleatoria.
+    async createAuthUser(legajo, password) {
+      if (!password || password.length < 12) return { ok: false, error: 'Contraseña temporal inválida' }
     const { data, error } = await supabase.rpc('admin_create_auth_user', {
       p_legajo:   legajo.trim(),
       p_password: password,
@@ -1707,7 +1708,7 @@ const PantallaCambioPassword = ({ user, onChanged, t }) => {
   const [error, setError] = useState('');
 
   const handleSubmit = async () => {
-    if (pass1.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return; }
+    if (pass1.length < 12) { setError('La contraseña debe tener al menos 12 caracteres'); return; }
     if (pass1 !== pass2) { setError('Las contraseñas no coinciden'); return; }
     if (pass1 === user.password) { setError('No podés usar la misma contraseña'); return; }
     const updated = await dataService.changePassword(user.legajo, pass1);
@@ -1733,7 +1734,7 @@ const PantallaCambioPassword = ({ user, onChanged, t }) => {
 
           <div style={{ marginBottom: 14 }}>
             <Label t={t}>Nueva contraseña</Label>
-            <Input t={t} type="password" value={pass1} onChange={e => setPass1(e.target.value)} placeholder="Mínimo 6 caracteres" />
+            <Input t={t} type="password" value={pass1} onChange={e => setPass1(e.target.value)} placeholder="Mínimo 12 caracteres" />
           </div>
           <div style={{ marginBottom: 8 }}>
             <Label t={t}>Repetir contraseña</Label>
@@ -4546,9 +4547,12 @@ const AdminUsuarios = ({ t, currentUser }) => {
       {showAddManual && <ModalAgregarUsuario t={t} onClose={() => setShowAddManual(false)} onAdd={async (u) => {
         // 1) Crear fila en tabla usuarios
         await dataService.addUsers([u]);
-        // 2) Crear entrada en Supabase Auth (contraseña genérica Cambio123!, fuerza cambio)
-        const authResult = await dataService.createAuthUser(u.legajo, 'Cambio123!');
-        console.log('onAdd createAuthUser result:', authResult);
+        // 2) Crear entrada en Supabase Auth con contraseña temporal aleatoria.
+                      const randomBytes = new Uint8Array(10);
+                      crypto.getRandomValues(randomBytes);
+                      const tempPassword = 'Tmp!' + Array.from(randomBytes, b => b.toString(16).padStart(2, '0')).join('');
+                      const authResult = await dataService.createAuthUser(u.legajo, tempPassword);
+                      console.log('onAdd createAuthUser result:', { ok: authResult?.ok === true });
         const authOk = authResult?.ok === true;
         await dataService.logEvent({
           accion: 'CREATE',
@@ -4556,8 +4560,15 @@ const AdminUsuarios = ({ t, currentUser }) => {
           desc: `Creó usuario ${u.legajo} · auth: ${authOk ? 'OK' : (authResult?.error || 'ERROR')}`
         });
         setShowAddManual(false);
-        refresh();
-        if (!authOk) {
+                      refresh();
+                      if (authOk) {
+                        alert(
+                          'Usuario ' + u.legajo + ' creado.\n\n' +
+                          'Contraseña temporal (se muestra una sola vez):\n' + tempPassword +
+                          '\n\nEl usuario deberá cambiarla en el primer ingreso.'
+                        );
+                      }
+                      if (!authOk) {
           // El usuario quedó en la tabla pero sin acceso — avisar al admin
           const motivo = authResult?.error || 'Error desconocido';
           alert(
@@ -4728,7 +4739,7 @@ const ModalAgregarUsuario = ({ t, onClose, onAdd }) => {
       <div style={{ background: t.infoSoft, padding: 10, borderRadius: 6, marginBottom: 16 }}>
         <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.info, letterSpacing: '0.1em', marginBottom: 4 }}>CONTRASEÑA INICIAL</div>
         <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.text }}>
-          Se asigna <span style={{ fontFamily: 'JetBrains Mono', color: t.accent }}>Cambio123!</span>. El usuario deberá cambiarla en su primer ingreso.
+          Se generará una contraseña temporal aleatoria al crear la cuenta. Se mostrará una sola vez y el usuario deberá cambiarla en su primer ingreso.
         </div>
       </div>
 
