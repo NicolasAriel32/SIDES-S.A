@@ -7,10 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     open: true,
-    host: true
+    host: '127.0.0.1'
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: false
   }
 })
