@@ -224,6 +224,43 @@ El proceso físico real incluye:
 - se separa físicamente el pallet;
 - se completa una manila en papel con falla, responsable, máquina, turno y cantidad de cajas, entre otros datos.
 
-Este hallazgo confirma que `REVISADO sin NC/segregación` no captura por sí solo el tratamiento físico del producto no conforme.
+Se confirmó posteriormente que la manila es oficialmente la **No Conformidad** cuando el supervisor determina que corresponde rechazar/segregar material.
 
-Queda por definir antes de cambiar ese flujo si la manila es formalmente la No Conformidad de SIDES o si es un registro de segregación/bloqueo que luego puede originar una NC distinta.
+También se confirmó que una falla informada por el operario no equivale automáticamente a una NC. El supervisor puede:
+- determinar que no corresponde rechazo;
+- pedir revisión al 100% de la caja actual mientras la línea continúa;
+- o generar la NC oficial y segregar el tramo afectado.
+
+Por lo tanto, el problema del flujo legacy no era la existencia de un resultado “sin NC”, sino que `REVISADO` no expresaba de forma estructurada **qué decisión tomó el supervisor**.
+
+
+## 12. Flujo estructurado de evaluación de fallas de estanqueidad
+
+Se implementó `evaluaciones_estanqueidad` como registro append-only y auditado.
+
+Decisiones permitidas:
+- `SIN_RECHAZO`;
+- `REVISION_100_CAJA`;
+- `GENERAR_NC`.
+
+Sólo el rol `supervisor` puede ejecutar `evaluar_falla_estanqueidad()`.
+
+### SIN_RECHAZO
+La prueba pasa a `REVISADO_SIN_NC`. Se conserva que existió una falla reportada por el operario, quién la evaluó y que el supervisor decidió que no correspondía rechazo.
+
+### REVISION_100_CAJA
+La prueba pasa a `REVISION_100_CAJA`, permanece pendiente y se genera automáticamente una observación para el operario: `REVISAR UNA CAJA AL 100%`. La producción puede continuar en paralelo según el proceso confirmado.
+
+Una evaluación posterior debe resolver el caso como `SIN_RECHAZO` o `GENERAR_NC`.
+
+### GENERAR_NC
+La caja actual de la prueba se toma server-side como `caja_hasta`. El supervisor debe indicar `caja_desde`, cantidad de cajas y confirmar que el material quedó segregado.
+
+La NC creada conserva snapshots de máquina, turno, lote, producto y fallas disponibles de la prueba origen, además del rango de cajas y fecha de segregación.
+
+El estado de la prueba pasa a `NC_ABIERTA`.
+
+### Anti-bypass
+- Las NC nuevas ya no admiten INSERT directo desde roles API.
+- Un trigger impide pasar una prueba rechazada a estados de decisión sin una evaluación estructurada reciente.
+- Los registros legacy quedan fuera de esta exigencia mediante versionado del flujo, para no impedir su consulta/cierre ni reescribir historia.
