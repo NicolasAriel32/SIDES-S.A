@@ -1150,9 +1150,9 @@ const dataService = {
         pruebaId:          codigoPrueba,
         pruebaSupabaseId:  nc.prueba_id,
         controlCalidadId:  nc.control_calidad_id,
-        maquina:           p.id_maquina || cc.id_maquina || '',
-        producto:          cc.nombre_producto || '',
-        lote:              cc.numero_lote || '',
+        maquina:           esCalidad ? (cc.id_maquina || '') : (nc.maquina_snapshot || p.id_maquina || ''),
+        producto:          esCalidad ? (cc.nombre_producto || '') : (nc.producto_snapshot || p.codigo_producto || ''),
+        lote:              esCalidad ? (cc.numero_lote || '') : (nc.lote_snapshot || p.numero_lote || ''),
         operario:          usuariosMap.get(p.operario_legajo) || p.operario_legajo || cc.inspector_nombre || '',
         operarioLegajo:    p.operario_legajo || cc.inspector_legajo || '',
         tipos:             p.fallas?.map(f => f.tipo_falla_id)
@@ -1161,8 +1161,12 @@ const dataService = {
         cabezalesFalla:    p.cantidad_cabezales_afectados
                             ?? ((cc.cantidad_rechazo || 0) * 336),
         cantidadRechazo:   cc.cantidad_rechazo ?? null,
-        cajaDesde:         cc.caja_desde ?? null,
-        cajaHasta:         cc.caja_hasta ?? null,
+        cajaDesde:         esCalidad ? (cc.caja_desde ?? null) : (nc.caja_desde_estanqueidad ?? null),
+        cajaHasta:         esCalidad ? (cc.caja_hasta ?? null) : (nc.caja_hasta_estanqueidad ?? null),
+        cantidadCajasAfectadas: nc.cantidad_cajas_afectadas ?? null,
+        segregacionConfirmada: nc.segregacion_confirmada === true,
+        fechaSegregacion:  nc.fecha_segregacion ?? null,
+        flujoEstanqueidadVersion: nc.flujo_estanqueidad_version ?? null,
         observaciones:     p.observaciones || cc.observacion_libre || '',
         estado:            nc.estado,
         supervisorLegajo:  nc.supervisor_legajo,
@@ -2305,7 +2309,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // CAMBIO v4: marcar observación como leída
   const handleMarkRead = async (obsId) => {
-    await dataService.markObservationAsRead(obsId, `${user.nombre} ${user.apellido}`);
+    await dataService.markObservationAsRead(obsId);
     await dataService.logEvent({
       accion: 'READ', usuario: `${user.nombre} ${user.apellido}`,
       desc: `Observación recibida y leída ${obsId}`
@@ -5313,6 +5317,13 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
           <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Detectado por:' : 'Operario:'}</strong> {nc.operario || '—'}</span>
           <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Producto/Lote:' : 'Prueba:'}</strong> {nc.origen === 'CALIDAD' ? `${nc.producto || '—'} · ${nc.lote || '—'}` : (nc.pruebaId || '—')}</span>
           <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Cabezales en rechazo:' : 'Cabezales originales:'}</strong> {nc.cabezalesFalla ?? '—'}{nc.origen === 'CALIDAD' ? '' : ' de 20'}</span>
+          {nc.origen === 'ESTANQUEIDAD' && nc.cantidadCajasAfectadas != null && (
+            <>
+              <span><strong style={{ color: t.text }}>Rango segregado:</strong> caja {nc.cajaDesde || '—'} → {nc.cajaHasta || '—'}</span>
+              <span><strong style={{ color: t.text }}>Cantidad de cajas:</strong> {nc.cantidadCajasAfectadas}</span>
+              <span><strong style={{ color: t.text }}>Segregación:</strong> {nc.segregacionConfirmada ? 'CONFIRMADA' : '—'}</span>
+            </>
+          )}
         </div>
         {nc.observaciones && (
           <div style={{
