@@ -35,7 +35,7 @@ const calcResultado = (total, desc) => {
 };
 
 const emptyPlanilla = () => ({
-  inspector:'', accion_previa:'', descartados:'',
+  accion_previa:'', descartados:'',
   defectos:[], es_final:true, observaciones:'',
 });
 
@@ -96,8 +96,6 @@ export default function VistaRecontrol({ t, currentUser }) {
   const [pendientes, setPendientes] = useState([]);
   const [hechos, setHechos] = useState([]);
   const [defectosCat, setDefectosCat] = useState([]);
-  // v7: el recontrol lo puede registrar cualquier usuario activo del sistema
-  const [usuariosCat, setUsuariosCat] = useState([]);
   // v7: historial por mes y turno
   const hoy = new Date();
   const [histAnio, setHistAnio] = useState(hoy.getFullYear());
@@ -120,7 +118,6 @@ export default function VistaRecontrol({ t, currentUser }) {
         fetchCatalogos(), fetchRechazosPendientes(), fetchRecontrolesDelDia(),
       ]);
       setDefectosCat(cat.defectos);
-      setUsuariosCat(cat.usuarios || []);
       setPendientes(pend);
       setHechos(rec);
     } catch(e){ setErrorCarga(e.message); }
@@ -157,7 +154,7 @@ export default function VistaRecontrol({ t, currentUser }) {
   const toggleDef = d => setForm(f=>({...f,defectos:f.defectos.includes(d)?f.defectos.filter(x=>x!==d):[...f.defectos,d]}));
 
   // Total automático: cajas rechazadas × cabezales por caja (336 por defecto,
-  // a futuro según la medida del producto). El inspector solo carga las malas.
+  // a futuro según la medida del producto). El responsable autenticado carga las malas.
   const total = activo ? activo.cantidad_rechazo * CABEZALES_POR_CAJA : 0;
   const desc  = parseInt(form.descartados);
   const recuperados = (total>0 && !isNaN(desc)) ? total-desc : null;
@@ -165,18 +162,16 @@ export default function VistaRecontrol({ t, currentUser }) {
   const resultado = calcResultado(total, desc);
   const excede = total>0 && !isNaN(desc) && desc>total;
 
-  const formValido = form.inspector && form.accion_previa
+  const formValido = !!currentUser?.legajo && form.accion_previa
     && total>0 && !isNaN(desc) && desc>=0 && !excede && !guardando;
 
   const guardar = async () => {
     if(!formValido||!activo) return;
     setErrorOp(null); setGuardando(true);
     try {
-      const insp = usuariosCat.find(i=>i.legajo===form.inspector);
       await apiGuardarRecontrol({
         noConformidadId: activo.id,
         controlCalidadId: activo.control_calidad_id,
-        inspector: insp,
         accionPrevia: form.accion_previa,
         reinspeccionados: total,
         descartados: desc,
@@ -371,11 +366,10 @@ export default function VistaRecontrol({ t, currentUser }) {
 
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 16px'}}>
             <div style={S.campo}>
-              <label style={S.label}>Quién controla (legajo) <span style={S.req}>*</span></label>
-              <select style={S.select} value={form.inspector} onChange={e=>hF('inspector',e.target.value)}>
-                <option value="">Seleccionar…</option>
-                {usuariosCat.map(i=><option key={i.legajo} value={i.legajo}>{i.legajo} — {i.nombre}</option>)}
-              </select>
+              <label style={S.label}>Responsable autenticado</label>
+              <div style={{...S.input,background:t.surfaceHi,cursor:'default'}}>
+                {currentUser?.legajo || '—'} — {currentUser ? `${currentUser.nombre || ''} ${currentUser.apellido || ''}`.trim() : 'Sin sesión'}
+              </div>
             </div>
             <div style={S.campo}>
               <label style={S.label}>Acción <span style={S.req}>*</span></label>
