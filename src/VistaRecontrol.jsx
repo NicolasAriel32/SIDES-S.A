@@ -4,7 +4,7 @@ import {
   PackageCheck, CheckCircle2, RotateCcw, Loader2
 } from 'lucide-react';
 import {
-  fetchCatalogos, fetchRechazosPendientes, fetchRecontrolesDelDia,
+  fetchDefectosRecontrol, fetchRechazosPendientes, fetchRecontrolesDelDia,
   fetchRecontrolesHistorial, guardarRecontrol as apiGuardarRecontrol,
 } from './api/calidad.js';
 
@@ -114,20 +114,28 @@ export default function VistaRecontrol({ t, currentUser }) {
   const cargar = useCallback(async ()=>{
     setCargando(true); setErrorCarga(null);
     try {
-      const [cat, pend, rec] = await Promise.all([
-        fetchCatalogos(), fetchRechazosPendientes(), fetchRecontrolesDelDia(),
+      const puedeVerHistorial = currentUser?.rol !== 'operario';
+      const [defectos, pend, rec] = await Promise.all([
+        fetchDefectosRecontrol(),
+        fetchRechazosPendientes(),
+        puedeVerHistorial ? fetchRecontrolesDelDia() : Promise.resolve([]),
       ]);
-      setDefectosCat(cat.defectos);
+      setDefectosCat(defectos);
       setPendientes(pend);
       setHechos(rec);
     } catch(e){ setErrorCarga(e.message); }
     finally { setCargando(false); }
-  },[]);
+  },[currentUser?.rol]);
   useEffect(()=>{ cargar(); },[cargar]);
 
   // v7: historial de recontroles finalizados (por mes y turno)
   useEffect(()=>{
     let cancelado = false;
+    if (currentUser?.rol === 'operario') {
+      setHistorial([]);
+      setHistCargando(false);
+      return ()=>{ cancelado = true; };
+    }
     (async ()=>{
       setHistCargando(true);
       try {
@@ -137,7 +145,7 @@ export default function VistaRecontrol({ t, currentUser }) {
       finally { if (!cancelado) setHistCargando(false); }
     })();
     return ()=>{ cancelado = true; };
-  },[histAnio, histMes, histTurno, hechos.length]);
+  },[histAnio, histMes, histTurno, hechos.length, currentUser?.rol]);
 
   const tone = (name) => ({success:t.success,warn:t.warn,danger:t.danger}[name] || t.textMuted);
   const toneSoft = (name) => ({success:t.successSoft,warn:t.warnSoft,danger:t.dangerSoft}[name] || t.surfaceHi);
