@@ -1,0 +1,11 @@
+-- Extend traceability_integrity_status() for supervisor leak triage
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- New indicators:
+--   rechazos_legacy_revisado_sin_evaluacion
+--   revision_100_pendientes
+--   evaluaciones_estanqueidad_total
+--   nc_estanqueidad_v2_sin_manila_completa
+--
+-- Authoritative implementation:
+-- Supabase migration traceability_status_include_leak_supervisor_triage
