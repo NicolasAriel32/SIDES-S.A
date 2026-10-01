@@ -1,0 +1,27 @@
+-- =====================================================================
+-- Security hardening — business roles + temporary passwords
+-- Applied 2026-10-01
+--
+-- Business rules confirmed:
+--   • Control de Calidad: only inspector.
+--   • Recontrol: inspector, operario or supervisor.
+--   • Temporary passwords: unique/random, one-time display; no universal default.
+--
+-- Notes:
+--   • Actor identity is derived from auth.uid() server-side.
+--   • Client-supplied inspector identity is ignored.
+--   • Recontrol result and linked control are derived server-side.
+--   • The full function bodies live in Supabase migration history.
+-- =====================================================================
+
+-- This repository marker documents the applied migration:
+-- security_role_checks_and_temp_passwords
+--
+-- Verify in Supabase before deployment:
+--   guardar_control_calidad(jsonb)
+--   guardar_recontrol(jsonb)
+--   admin_create_auth_user(text,text)
+--
+-- Grants expected:
+--   authenticated may EXECUTE the functions above,
+--   but each function enforces its own role/active-user checks.
