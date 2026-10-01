@@ -164,6 +164,8 @@ Si en el futuro cambia la cantidad de cabezales por caja según producto, esta r
 6. Toda evidencia temporal nueva se registra explícitamente en UTC. Las marcas históricas sin zona se conservan como legado.
 7. La integridad debe ser verificable de forma repetible; `audit_integrity_status()` es el control técnico actual para admin/auditor.
 8. Una cadena dentro de la misma base no reemplaza backup ni evidencia externa. Antes de considerar el esquema maduro para auditoría formal debe existir una política de retención, respaldo recuperable y un mecanismo de monitoreo/alerta.
+9. Un backup no se considera verificado por existir: debe superar una restauración documentada en un entorno aislado.
+10. El monitoreo interno de integridad debe ejecutarse automáticamente y conservar evidencia append-only de cada comprobación.
 
 ## 10. Regla de cambio
 
