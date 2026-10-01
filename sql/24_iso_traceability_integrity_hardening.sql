@@ -1,0 +1,14 @@
+-- ISO traceability integrity hardening
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Enforced invariants:
+--   * each NC has exactly one origin: prueba OR control_calidad;
+--   * rejected-quality box range equals cantidad_rechazo;
+--   * one merma per recontrol;
+--   * RECONTROL mermas must link to recontrol + NC;
+--   * a recontrol's control_calidad_id must match its NC;
+--   * guardar_control_calidad() derives machine/product/lot/client/specification
+--     from orden_maquina server-side rather than trusting browser snapshots.
+--
+-- Authoritative implementation:
+-- Supabase migration iso_traceability_integrity_hardening
