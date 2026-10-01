@@ -5097,7 +5097,7 @@ const ModalObservar = ({ test, onClose, onSend, t }) => {
 };
 
 // =================================================================
-// MODAL GESTIONAR NC (supervisor — análisis y cierre)
+// MODAL GESTIONAR NC (supervisor/inspector — análisis y cierre)
 // =================================================================
 
 const CAUSAS_RAIZ = [
@@ -5115,7 +5115,6 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
   const [errorMsg, setErrorMsg] = useState('');
 
   // Campos para el cierre
-  const [legajoCierre,         setLegajoCierre]         = useState(nc.legajoCierre         || currentUser.legajo);
   const [cabezalesVerificados, setCabezalesVerificados] = useState(nc.cabezalesVerificados ?? '');
   const [causaRaiz,            setCausaRaiz]            = useState(nc.causaRaiz             || '');
   const [notasCierre,          setNotasCierre]          = useState(nc.notasCierre           || '');
@@ -5153,7 +5152,6 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
       estado:               'CERRADA',
       causaRaiz,
       notasCierre:          notasCierre || null,
-      legajoCierre:         legajoCierre.trim(),
       cabezalesVerificados: cabezalesVerificados !== '' ? Number(cabezalesVerificados) : null,
       kgMerma:              kgMerma !== null ? Number(kgMerma) : null,
       cerradaAt:            new Date().toISOString(),
@@ -5191,9 +5189,9 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>
           <span><strong style={{ color: t.text }}>Máquina:</strong> {nc.maquina}</span>
-          <span><strong style={{ color: t.text }}>Operario:</strong> {nc.operario}</span>
-          <span><strong style={{ color: t.text }}>Prueba:</strong> {nc.pruebaId || '—'}</span>
-          <span><strong style={{ color: t.text }}>Cabezales originales:</strong> {nc.cabezalesFalla ?? '—'} de 20</span>
+          <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Detectado por:' : 'Operario:'}</strong> {nc.operario || '—'}</span>
+          <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Producto/Lote:' : 'Prueba:'}</strong> {nc.origen === 'CALIDAD' ? `${nc.producto || '—'} · ${nc.lote || '—'}` : (nc.pruebaId || '—')}</span>
+          <span><strong style={{ color: t.text }}>{nc.origen === 'CALIDAD' ? 'Cabezales en rechazo:' : 'Cabezales originales:'}</strong> {nc.cabezalesFalla ?? '—'}{nc.origen === 'CALIDAD' ? '' : ' de 20'}</span>
         </div>
         {nc.observaciones && (
           <div style={{
@@ -5238,15 +5236,14 @@ const ModalGestionarNC = ({ nc, currentUser, onClose, onUpdate, t }) => {
           }}>DATOS DE CIERRE</div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-            {/* Legajo de cierre */}
+            {/* Responsable de cierre: identidad derivada de la sesión */}
             <div>
-              <Label t={t}>Legajo responsable de cierre</Label>
-              {esCerrada
-                ? <div style={{ fontFamily: 'JetBrains Mono', fontSize: 14, color: t.text, padding: '10px 0' }}>
-                    {nc.legajoCierre || nc.supervisorLegajo || '—'}
-                  </div>
-                : <Input t={t} value={legajoCierre} onChange={e => setLegajoCierre(e.target.value)} placeholder={currentUser.legajo} />
-              }
+              <Label t={t}>Responsable de cierre</Label>
+              <div style={{ fontFamily: 'JetBrains Mono', fontSize: 14, color: t.text, padding: '10px 0' }}>
+                {esCerrada
+                  ? (nc.legajoCierre || nc.supervisorLegajo || '—')
+                  : `${currentUser.legajo} · ${currentUser.nombre || ''} ${currentUser.apellido || ''}`}
+              </div>
             </div>
 
             {/* Causa raíz */}
