@@ -1,0 +1,15 @@
+-- Reduce exposed SECURITY DEFINER surface and constrain semantic audit RPC
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Changes:
+--   * next_numero_secuencial() is no longer executable by API roles.
+--     PostgreSQL assigns pruebas.numero_secuencial via DEFAULT nextval(...).
+--   * registrar_evento_auditoria() now:
+--       - requires authenticated user;
+--       - accepts only a fixed action allowlist;
+--       - truncates free-text fields to bounded lengths;
+--       - rate-limits semantic events to 60/user/minute;
+--       - keeps actor identity server-side.
+--
+-- Authoritative implementation:
+-- Supabase migration security_reduce_definer_surface_and_rate_limit_semantic_audit
