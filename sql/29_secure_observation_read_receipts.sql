@@ -1,0 +1,15 @@
+-- Secure supervisor observation/read-receipt workflow
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Operators can acknowledge a supervisor instruction but cannot edit its
+-- content, actor, target test, machine or recipient.
+--
+-- Changes:
+--   * direct UPDATE/DELETE/TRUNCATE on observaciones revoked from API roles;
+--   * observation body protected by DB trigger;
+--   * marcar_observacion_leida(uuid) derives the operator from auth.uid();
+--   * acknowledgement cannot be reverted;
+--   * legacy nc_insert RLS policy removed because NC creation is server-side.
+--
+-- Authoritative implementation:
+-- Supabase migration secure_observation_read_receipts_and_remove_direct_nc_policy
