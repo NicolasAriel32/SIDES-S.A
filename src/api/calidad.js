@@ -266,7 +266,7 @@ export async function fetchControlesDelDia() {
  * en una sola transacción (RPC guardar_control_calidad).
  */
 export async function guardarControl({
-  maquinaId, orden, sesion, inspector, nroCaja,
+  maquinaId, orden, sesion, nroCaja,
   aperturas, largos, alertasAp, alertasLg,
   noConforme, defectosIds, observacion,
   cantidadRechazo, cajaDesde, cajaHasta,
@@ -281,8 +281,6 @@ export async function guardarControl({
       orden_maquina_id: orden.orden_maquina_id || '',
       sesion_calidad_id: sesion.uuid || '',
       especifc_producto_id: orden.especifc_producto_id || '',
-      inspector_legajo: inspector?.legajo || '',
-      inspector_nombre: inspector?.nombre || '',
       numero_caja: nroCaja,
       numero_lote: orden.lote,
       nombre_producto: orden.producto,
@@ -434,21 +432,16 @@ export async function fetchRecontrolesHistorial({ anio, mes, turno = null }) {
 
 /** Guarda recontrol + defectos y cierra/avanza la NC (RPC guardar_recontrol). */
 export async function guardarRecontrol({
-  noConformidadId, controlCalidadId, inspector,
+  noConformidadId,
   accionPrevia, reinspeccionados, descartados,
-  resultado, kgMerma, esFinal, observaciones, defectosIds,
+  esFinal, observaciones, defectosIds,
 }) {
   const { data, error } = await supabase.rpc('guardar_recontrol', {
     p: {
       no_conformidad_id: noConformidadId,
-      control_calidad_id: controlCalidadId || '',
-      inspector_legajo: inspector?.legajo || '',
-      inspector_nombre: inspector?.nombre || '',
       accion_previa: accionPrevia,
       cabezales_reinspeccionados: reinspeccionados,
       cabezales_descartados: descartados,
-      resultado,
-      kg_merma: kgMerma != null ? String(kgMerma) : '',
       es_recontrol_final: esFinal,
       observaciones: observaciones || '',
       defectos: defectosIds,
