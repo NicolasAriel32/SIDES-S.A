@@ -52,3 +52,7 @@ Se eligió la opción B: todo operario o supervisor habilitado para recontrol pu
 - El recontrol definitivo desaparece de la cola operativa de recontrol y queda pendiente de decisión de cierre.
 - Sólo supervisor o inspector pueden cambiar la NC a CERRADA.
 - La identidad de quien cierra se deriva de la sesión autenticada en la base; no se confía en un legajo escrito desde el navegador.
+
+
+## Recontrol por jornada
+Se confirmó que cada registro de recontrol debe capturar únicamente la cantidad realmente reinspeccionada durante esa jornada/turno, no el total acumulado manualmente. Supabase calcula el acumulado y el pendiente. No permite superar el objetivo original del rechazo y sólo acepta marcar un recontrol como definitivo cuando el acumulado alcanza exactamente el total a recontrolar. La merma, recuperados y resultado se calculan sobre la cantidad de esa jornada.
