@@ -36,7 +36,7 @@ const calcResultado = (total, desc) => {
 
 const emptyPlanilla = () => ({
   accion_previa:'', descartados:'',
-  defectos:[], es_final:true, observaciones:'',
+  defectos:[], es_final:false, observaciones:'',
 });
 
 // ─── ESTILOS (tokens del sistema) ─────────────────────────────────────────────
@@ -448,7 +448,7 @@ export default function VistaRecontrol({ t, currentUser }) {
             <div style={{...S.toggle,background:form.es_final?t.accent:t.border}} onClick={()=>hF('es_final',!form.es_final)}>
               <div style={{...S.toggleKnob,transform:form.es_final?'translateX(18px)':'translateX(0)'}}/>
             </div>
-            <span style={{fontSize:13,color:t.text}}>Es el recontrol definitivo de este rechazo</span>
+            <span style={{fontSize:13,color:t.text}}>Recontrol terminado — dejar la NC pendiente de cierre</span>
           </div>
 
           {errorOp && (
