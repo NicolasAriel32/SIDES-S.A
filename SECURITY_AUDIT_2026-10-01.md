@@ -7,7 +7,7 @@ Repositorio `NicolasAriel32/SIDES-S.A` + proyecto Supabase `SIDES S.A`.
 
 ## Reglas de negocio confirmadas
 - Control de Calidad: sólo el rol `inspector` puede registrar controles.
-- Recontrol: pueden registrar `inspector`, `operario` y `supervisor`.
+- Recontrol: pueden registrar `inspector`, `operario` y `supervisor`. Operarios y supervisores deben ver todos los rechazos pendientes generados por Calidad, sin filtrar por máquina.
 - Alta/reset de usuarios: contraseña temporal aleatoria, distinta por usuario, mostrada una sola vez y con cambio obligatorio al primer ingreso.
 
 ## Correcciones aplicadas
@@ -36,6 +36,10 @@ Repositorio `NicolasAriel32/SIDES-S.A` + proyecto Supabase `SIDES S.A`.
 ## Pendientes importantes
 1. El repositorio sigue siendo público. Los archivos eliminados pueden permanecer en el historial Git; poner el repo privado o reescribir historia antes de una publicación formal.
 2. Cadena de auditoría: hay bifurcaciones históricas y no hay firmas HMAC. No modificar registros históricos para ocultarlo; diseñar una migración v2 con secuencia monotónica/checkpoint.
-3. Definir alcance de visibilidad para recontrol de operarios: todas las NC de Calidad vs. sólo la máquina asignada.
+3. Definir quién puede cerrar definitivamente una NC desde un recontrol; hoy `guardar_recontrol()` permite cierre final a cualquiera de los roles habilitados para recontrol.
 4. Ejecutar pruebas end-to-end por rol antes de desplegar en Cloudflare.
 5. La protección de contraseñas filtradas de Supabase sigue desactivada y depende del plan/configuración disponible.
+
+
+## Decisión de visibilidad de recontrol
+Se eligió la opción B: todo operario o supervisor habilitado para recontrol puede consultar la cola completa de rechazos pendientes originados por Control de Calidad. Esto se implementa mediante la RPC server-side `recontrol_pendientes()`, sin ampliar el SELECT general de `controles_calidad` ni `no_conformidades` para operarios. El historial amplio sigue restringido para operarios.
