@@ -3534,21 +3534,63 @@ const VistaSupervisor = ({ t, currentUser }) => {
     reload();
   }
 
-  // v7: se quitó "aprobar rechazo y abrir NC" — los rechazos se gestionan en el
-  // módulo de Control de Calidad. La cola solo notifica y deja asentado el aviso.
+  // La falla reportada por el operario es una señal. El supervisor decide
+  // si no genera rechazo, si pide una revisión al 100% de la caja actual,
+  // o si genera la NC oficial con segregación del material.
+  const decidirSinRechazo = async () => {
+    if (!enAprobacion || decisionLoading) return;
+    setDecisionLoading(true);
+    setDecisionError('');
+    const res = await dataService.evaluateLeakFailure(enAprobacion.supabase_id, 'SIN_RECHAZO');
+    setDecisionLoading(false);
+    if (!res.ok) {
+      setDecisionError(res.error || 'No se pudo registrar la decisión');
+      return;
+    }
+    setMostrarFormNC(false);
+    await reload();
+  };
 
-  // v6: quitar de la cola sin abrir NC — solo marcar como revisado/leído
-  const marcarLeidoAprobacion = async () => {
-    await dataService.updateTest(enAprobacion.id, {
-      estadoFinal: 'REVISADO',
-      esperandoAprobacion: false,
+  const pedirRevision100 = async () => {
+    if (!enAprobacion || decisionLoading) return;
+    setDecisionLoading(true);
+    setDecisionError('');
+    const res = await dataService.evaluateLeakFailure(enAprobacion.supabase_id, 'REVISION_100_CAJA');
+    setDecisionLoading(false);
+    if (!res.ok) {
+      setDecisionError(res.error || 'No se pudo solicitar la revisión al 100%');
+      return;
+    }
+    await reload();
+  };
+
+  const generarNCEstanqueidad = async () => {
+    if (!enAprobacion || decisionLoading) return;
+    const cantidad = Number(ncCantidadCajas);
+    if (!ncCajaDesde.trim() || !Number.isInteger(cantidad) || cantidad <= 0 || !ncSegregada) {
+      setDecisionError('Completá caja desde, cantidad de cajas y confirmá la segregación física.');
+      return;
+    }
+
+    setDecisionLoading(true);
+    setDecisionError('');
+    const res = await dataService.evaluateLeakFailure(enAprobacion.supabase_id, 'GENERAR_NC', {
+      cajaDesde: ncCajaDesde.trim(),
+      cantidadCajas: cantidad,
+      segregacionConfirmada: true,
     });
-    await dataService.logEvent({
-      accion: 'MARK_READ',
-      usuario: `${currentUser.nombre} ${currentUser.apellido}`,
-      desc: `Prueba ${enAprobacion.id} quitada de cola de aprobaciones · marcada como leída (sin NC)`
-    });
-    reload();
+    setDecisionLoading(false);
+
+    if (!res.ok) {
+      setDecisionError(res.error || 'No se pudo generar la NC');
+      return;
+    }
+
+    setMostrarFormNC(false);
+    setNcCajaDesde('');
+    setNcCantidadCajas('');
+    setNcSegregada(false);
+    await reload();
   };
 
   return (
