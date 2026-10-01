@@ -1,0 +1,29 @@
+-- Supervisor triage for leak-test failures + official manila NC
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Confirmed business rule:
+--   operator-reported failure != automatic product rejection / NC.
+--   Only supervisor decides disposition.
+--
+-- Structured decisions:
+--   SIN_RECHAZO
+--   REVISION_100_CAJA
+--   GENERAR_NC
+--
+-- Adds:
+--   evaluaciones_estanqueidad (append-only, audited)
+--   evaluar_falla_estanqueidad(...)
+--   official leak-NC snapshot/range fields
+--   trigger preventing direct state-transition bypass
+--
+-- GENERAR_NC requires:
+--   caja_desde
+--   caja_hasta = current test box (server-side)
+--   cantidad_cajas > 0
+--   physical segregation confirmed
+--
+-- REVISION_100_CAJA automatically sends an operator observation and keeps the
+-- test pending for a later supervisor decision.
+--
+-- Authoritative implementation:
+-- Supabase migration leak_failure_supervisor_triage_and_official_nc
