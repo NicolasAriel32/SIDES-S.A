@@ -1,0 +1,25 @@
+-- Expanded critical automatic audit coverage
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- fn_audit_trail() was hardened to accept UUID and non-UUID business keys.
+--
+-- New audited tables:
+--   pruebas_fallas
+--   cajas
+--   lotes
+--   maquinas
+--   clientes
+--   especifc_producto
+--   tipos_falla
+--   inspectores_calidad
+--   profiles
+--   observaciones
+--   turnos
+--
+-- Together with previously audited tables this gives automatic DB-trigger
+-- coverage to 24 critical public tables. audit_log itself and the integrity
+-- monitoring table are intentionally not audited by trg_audit_trail to avoid
+-- recursion; both are protected as append-only by dedicated controls.
+--
+-- Authoritative implementation:
+-- Supabase migration iso_expand_critical_audit_coverage
