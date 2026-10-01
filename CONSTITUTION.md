@@ -93,13 +93,21 @@ Esta Constitución expresa **qué debe ser verdad en el sistema**. Si una pantal
 5. La caja registrada en la prueba representa la caja física sobre la cual se referencia esa prueba en ese momento.
 6. Los datos históricos de caja/lote que hoy existen sólo como texto no se normalizan automáticamente sin evidencia suficiente.
 
-## 4.4 Rechazo de estanqueidad y segregación física
+## 4.4 Falla de estanqueidad, criterio del supervisor y NC oficial
 
-1. Cuando una prueba de estanqueidad presenta falla, el supervisor investiga hacia atrás hasta identificar desde qué caja considera que comienza el tramo afectado y toma como extremo la caja actual inspeccionada.
-2. El material afectado se **segrega físicamente**: el pallet se separa del flujo normal.
-3. Hoy esa segregación se documenta en una **manila/papel** que incluye, como mínimo, falla detectada, responsable/supervisor, máquina, turno y cantidad de cajas afectadas.
-4. El sistema digital debe poder reconstruir ese rango y su segregación sin borrar la evidencia física existente durante la transición.
-5. El comportamiento anterior de marcar un rechazo de estanqueidad simplemente como `REVISADO` sin registrar la segregación no se considera suficiente como estado final de trazabilidad.
+1. Una falla informada por el operario en la prueba de estanqueidad es una **señal que requiere criterio del supervisor**. No crea automáticamente un rechazo de producto ni una No Conformidad.
+2. Sólo el supervisor decide el tratamiento de esa señal.
+3. Las decisiones estructuradas son:
+   - `SIN_RECHAZO`: el supervisor determina que la señal no justifica rechazo/NC y cierra el aviso con trazabilidad.
+   - `REVISION_100_CAJA`: el supervisor pide al operario revisar la caja actual al 100%; la línea puede continuar en paralelo. La prueba permanece pendiente de decisión final.
+   - `GENERAR_NC`: el supervisor determina que existe producto no conforme, define el tramo afectado y genera la NC oficial.
+4. Una decisión `SIN_RECHAZO` **sí es un resultado válido**; lo que no es suficiente para registros nuevos es un simple “leído/revisado” sin decisión estructurada del supervisor.
+5. Si se genera NC, el supervisor investiga hacia atrás hasta identificar la **caja desde** y la **caja actual** registrada en la prueba es la **caja hasta**.
+6. La NC de estanqueidad es oficialmente la **manila** que acompaña al material segregado.
+7. Al generar la NC deben registrarse, como mínimo: prueba origen, supervisor, máquina, turno, lote/producto disponibles, falla, caja desde, caja hasta, cantidad de cajas y confirmación de segregación física.
+8. El material afectado se **segrega físicamente**: el pallet se separa del flujo normal.
+9. Durante la transición puede continuar existiendo la manila física; el sistema digital debe conservar la misma evidencia y vínculo con la prueba origen.
+10. Las evaluaciones del supervisor son append-only y auditadas. Una NC nueva de estanqueidad no puede crearse por INSERT directo del navegador: debe pasar por el flujo server-side de decisión.
 
 ## 5. Recontrol de rechazos
 
