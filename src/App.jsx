@@ -367,23 +367,22 @@ const dataService = {
     console.log('changePassword auth response:', { legajo, authError })
     if (authError) { console.error('changePassword auth:', authError); return null }
 
-    // 2) Actualizar fuerza_cambio y fecha en la tabla usuarios
-    const { data, error } = await supabase
-      .from('usuarios')
-      .update({
-        fuerza_cambio:        false,
-        cambio_password_date: new Date().toISOString()
-        // password_hash ya no se guarda — la contraseña vive en Supabase Auth
-      })
-      .eq('legajo', legajo)
-      .select()
-      .maybeSingle()
+    // 2) Marcar el cambio mediante una RPC acotada al usuario autenticado.
+      // No se permite UPDATE directo sobre la fila de usuarios: evita que un
+      // usuario pueda modificar su propio rol, estado o máquina asignada.
+      const { error: metaError } = await supabase.rpc('marcar_password_cambiada')
+      if (metaError) { console.error('changePassword metadata:', metaError); return null }
 
-    console.log('changePassword usuarios response:', { legajo, data, error })
-    if (error) { console.error('changePassword usuarios:', error); return null }
-    if (!data) { console.log('changePassword: usuario no encontrado', { legajo }); return null }
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('legajo', legajo)
+        .maybeSingle()
 
-    const updatedUser = mapUserFromDb(data)
+      if (error) { console.error('changePassword usuarios:', error); return null }
+      if (!data) { console.log('changePassword: usuario no encontrado', { legajo }); return null }
+
+      const updatedUser = mapUserFromDb(data)
     const current = await this.getCurrentUser()
     if (current?.legajo === legajo) {
       sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser))
@@ -793,12 +792,7 @@ const dataService = {
       this._ultimoError = maquinaError?.message || `máquina ${test.maquina} no encontrada`
       return null
     }
-
-    // DIAGNÓSTICO TEMPORAL — ver qué devuelve get_my_profile() en contexto real
-    const { data: debugRls } = await supabase.rpc('debug_my_rls')
-    console.log('DEBUG RLS context:', debugRls)
-
-    // 2) Turno actual y número secuencial
+// 2) Turno actual y número secuencial
     const turnoId = await this.getTurnoActualId()
     const numeroSec = await this._siguienteNumeroSecuencial()
 
@@ -1687,12 +1681,12 @@ const PantallaLogin = ({ onLogin, t }) => {
           </button>
 
           <div style={{ marginTop: 20, padding: 12, background: t.infoSoft, border: `1px solid ${t.info}30`, borderRadius: 6 }}>
-            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.info, letterSpacing: '0.1em', marginBottom: 4 }}>PRIMERA VEZ · ADMIN</div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, color: t.info, letterSpacing: '0.1em', marginBottom: 4 }}>ACCESO AUTORIZADO</div>
             <div style={{ fontFamily: 'Manrope', fontSize: 11, color: t.text }}>
-              Legajo: <span style={{ fontFamily: 'JetBrains Mono' }}>0001</span> · Password: <span style={{ fontFamily: 'JetBrains Mono' }}>admin</span>
+              Ingresá con el legajo y la contraseña asignados por un administrador.
             </div>
             <div style={{ fontFamily: 'Manrope', fontSize: 10, color: t.textMuted, marginTop: 4 }}>
-              Te pediremos cambiarla en el primer ingreso.
+              Si la cuenta requiere cambio de contraseña, el sistema lo solicitará al ingresar.
             </div>
           </div>
         </Card>
