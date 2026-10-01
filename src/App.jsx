@@ -753,7 +753,7 @@ const dataService = {
         tipos:               p.fallas?.map(f => f.tipo_falla_id) || [],
         cabezalesFalla:      p.cantidad_cabezales_afectados ?? 0,
         tuvoFalla:           p.tuvo_falla === true,
-        esperandoAprobacion: (p.tuvo_falla === true && p.estado_final === 'PENDIENTE_APROBACION'),
+        esperandoAprobacion: (p.tuvo_falla === true && ['PENDIENTE_APROBACION','REVISION_100_CAJA'].includes(p.estado_final)),
         aprobado:            p.timestamp_aprobada !== null && p.timestamp_aprobada !== undefined,
         timestamp:           normalizarFechaUTC(p.created_at),
         timestampSenal:      fechaSenal,
@@ -1188,57 +1188,29 @@ const dataService = {
     })
   },
 
-  async createNC(nc) {
-    // Resolver prueba_id (uuid) desde el código humano PRB-yyyymmdd-NNNN
-    // o desde supabase_id si nos lo pasaron directamente.
-    let pruebaId = nc.pruebaSupabaseId
-    if (!pruebaId && nc.pruebaId) {
-      const numero = parseInt(String(nc.pruebaId).split('-').pop(), 10)
-      if (!Number.isNaN(numero)) {
-        const { data: row } = await supabase
-          .from('pruebas').select('id')
-          .eq('numero_secuencial', numero)
-          .maybeSingle()
-        pruebaId = row?.id
-      }
-    }
-    if (!pruebaId) {
-      console.error('createNC: no se pudo resolver prueba_id', { pruebaId: nc.pruebaId })
-      return null
-    }
+  async createNC() {
+    throw new Error('Creación directa de NC de estanqueidad deshabilitada: usar evaluateLeakFailure(GENERAR_NC)')
+  },
 
-    // Supervisor que está abriendo la NC
-    let supervisorLegajo = nc.supervisorLegajo
-    if (!supervisorLegajo) {
-      try {
-        const cur = JSON.parse(sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER) || 'null')
-        supervisorLegajo = cur?.legajo
-      } catch {}
-    }
-
-    const { data, error } = await supabase
-      .from('no_conformidades')
-      .insert({
-        prueba_id:          pruebaId,
-        estado:             'ABIERTA',
-        supervisor_legajo:  supervisorLegajo
-        // numero_nc se autogenera por sequence; timestamp_apertura tiene default now()
-      })
-      .select()
-      .single()
-
-    console.log('createNC supabase response:', { pruebaId, data, error })
-    if (error) { console.error('createNC:', error); return null; }
-
-    const codigoNC = `NC-${String(data.numero_nc).padStart(6,'0')}`
-    await this.logEvent({
-      accion: 'CREATE_NC',
-      desc:   `Apertura ${codigoNC} sobre prueba ${nc.pruebaId}`,
-      tabla:  'no_conformidades',
-      registroId: data.id
+  async evaluateLeakFailure(pruebaId, decision, {
+    cajaDesde = null,
+    cantidadCajas = null,
+    segregacionConfirmada = false,
+    observacion = null,
+  } = {}) {
+    const { data, error } = await supabase.rpc('evaluar_falla_estanqueidad', {
+      p_prueba_id: pruebaId,
+      p_decision: decision,
+      p_caja_desde: cajaDesde,
+      p_cantidad_cajas: cantidadCajas,
+      p_segregacion_confirmada: segregacionConfirmada,
+      p_observacion: observacion,
     })
-
-    return { ...nc, id: codigoNC, supabase_id: data.id, numeroNC: data.numero_nc }
+    if (error) {
+      console.error('evaluateLeakFailure:', error)
+      return { ok: false, error: error.message }
+    }
+    return { ok: true, ...data }
   },
 
   async updateNC(ncIdOrSupabaseId, updates) {
@@ -3372,6 +3344,12 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // Verificaciones físicas del turno anterior (anti-fraude)
   const [verifPendientes, setVerifPendientes] = useState([]);
   const [mostrarVerif, setMostrarVerif] = useState(false);
+  const [mostrarFormNC, setMostrarFormNC] = useState(false);
+  const [ncCajaDesde, setNcCajaDesde] = useState('');
+  const [ncCantidadCajas, setNcCantidadCajas] = useState('');
+  const [ncSegregada, setNcSegregada] = useState(false);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decisionError, setDecisionError] = useState('');
 
   const reload = async () => {
     setMachines(await dataService.getMachines());
