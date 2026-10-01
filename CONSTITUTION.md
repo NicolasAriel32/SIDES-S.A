@@ -12,7 +12,9 @@ Esta Constitución expresa **qué debe ser verdad en el sistema**. Si una pantal
 ## 1.1 Base normativa confirmada
 
 - Dato de negocio confirmado por Nicolás el 2026-10-01: SIDES S.A. está certificada contra **ISO 9001:2026**.
-- Las decisiones de trazabilidad, registros, no conformidades, medición, evidencia y auditoría del sistema deben evaluarse contra esa edición como baseline de calidad.
+- Dato de negocio confirmado por Nicolás el 2026-10-01: SIDES S.A. está certificada contra **ISO/IEC 27001:2022**.
+- Las decisiones de trazabilidad, registros, no conformidades, medición, evidencia y auditoría del sistema deben evaluarse contra ISO 9001:2026 como baseline de calidad.
+- Las decisiones de acceso, logging, monitoreo, integridad, respaldo y preservación de evidencia deben evaluarse contra ISO/IEC 27001:2022 como baseline de seguridad de la información.
 - Las referencias anteriores a ISO 9001:2015 quedan como contexto histórico y no como baseline vigente del proyecto.
 
 ## 2. Principios globales
