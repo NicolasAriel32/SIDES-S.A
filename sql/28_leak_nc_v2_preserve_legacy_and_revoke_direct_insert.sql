@@ -1,0 +1,14 @@
+-- Preserve legacy leak NCs while enforcing v2 official-manila workflow
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Adds no_conformidades.flujo_estanqueidad_version.
+-- Legacy NCs remain version NULL and are not rewritten.
+-- New structured leak-test NCs are version 2 and must contain manila evidence.
+--
+-- Direct INSERT into no_conformidades was revoked from API roles.
+-- New NC creation must happen through controlled server-side workflows:
+--   guardar_control_calidad(...)
+--   evaluar_falla_estanqueidad(... GENERAR_NC ...)
+--
+-- Authoritative implementation:
+-- Supabase migration leak_nc_v2_preserve_legacy_and_revoke_direct_insert
