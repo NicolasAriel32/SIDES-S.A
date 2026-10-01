@@ -124,8 +124,7 @@ const mapUserFromDb = (user) => {
     nombre: user.nombre,
     apellido: user.apellido,
     email: user.email ?? null,
-    rol: user.rol,
-    password: user.password_hash,                     // schema real: password_hash
+    rol: user.rol
     forceChange: user.fuerza_cambio === true,         // schema real: fuerza_cambio
     maquinaAsignada: user.maquina_asignada ?? null,
     maquina_asignada: user.maquina_asignada ?? null,  // snake_case para compatibilidad con MVP
