@@ -144,6 +144,19 @@ Si en el futuro cambia la cantidad de cabezales por caja según producto, esta r
 3. La cadena criptográfica del `audit_log` está en revisión: se detectaron bifurcaciones históricas y la solución debe preservar la evidencia existente.
 4. No se considera resuelto un control de integridad hasta que exista una prueba que demuestre su comportamiento.
 
+
+
+## 9.1 Reglas canónicas de auditoría
+
+1. `audit_log` es append-only: la aplicación, usuarios autenticados y `service_role` no modifican ni eliminan eventos existentes.
+2. Los cambios reales en entidades críticas deben generar evidencia automática con origen `DB_TRIGGER`; un evento solicitado por el frontend se marca `SEMANTIC_RPC` y no sustituye esa evidencia.
+3. Los eventos nuevos usan cadena v2 con `chain_seq`, `event_time_utc`, UUID del actor, rol capturado al momento del evento y SHA-256 encadenado.
+4. Los 590 registros legacy no se reescriben. Su estado quedó anclado por el checkpoint `CHAIN_V2_START`.
+5. Control de Calidad, mediciones, defectos, recontroles, mermas, órdenes y sesiones de Calidad deben estar incluidos en auditoría automática.
+6. Toda evidencia temporal nueva se registra explícitamente en UTC. Las marcas históricas sin zona se conservan como legado.
+7. La integridad debe ser verificable de forma repetible; `audit_integrity_status()` es el control técnico actual para admin/auditor.
+8. Una cadena dentro de la misma base no reemplaza backup ni evidencia externa. Antes de considerar el esquema maduro para auditoría formal debe existir una política de retención, respaldo recuperable y un mecanismo de monitoreo/alerta.
+
 ## 10. Regla de cambio
 
 Cuando cambie una regla de negocio:
