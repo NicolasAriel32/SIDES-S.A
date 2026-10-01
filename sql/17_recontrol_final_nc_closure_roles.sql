@@ -1,0 +1,24 @@
+-- =====================================================================
+-- Recontrol final y cierre de No Conformidad
+-- Aplicado en Supabase: 2026-10-01
+--
+-- Regla de negocio confirmada:
+--   1) Operario, supervisor e inspector pueden registrar recontroles.
+--   2) Cualquiera de esos tres roles puede marcar un intento como definitivo.
+--   3) "Definitivo" NO cierra la NC.
+--   4) Sólo supervisor o inspector pueden cerrar definitivamente la NC.
+--   5) Si la NC proviene de Control de Calidad, no puede cerrarse sin un
+--      recontrol definitivo no anulado.
+--   6) Después del recontrol definitivo no se admiten nuevos intentos.
+--
+-- Implementación aplicada:
+--   - guardar_recontrol(jsonb) deja siempre la NC en EN ANALISIS.
+--   - recontrol_pendientes() excluye NC con recontrol definitivo registrado.
+--   - fn_nc_guard_close() protege el cambio a CERRADA a nivel DB.
+--   - trg_nc_guard_close ejecuta esa validación antes de cambiar estado.
+--   - nc_update permite UPDATE a admin/supervisor/inspector, pero el trigger
+--     impide que admin cierre una NC.
+--
+-- La definición efectiva y auditable está además en el historial de
+-- migraciones del proyecto Supabase.
+-- =====================================================================
