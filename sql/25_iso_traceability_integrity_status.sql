@@ -1,0 +1,17 @@
+-- Traceability integrity status
+-- Applied to Supabase project SIDES S.A on 2026-10-01.
+--
+-- Adds public.traceability_integrity_status(), callable only by authenticated
+-- admin/auditor after an internal role check.
+--
+-- It reports, without mutating historical data:
+--   missing product/box/lot/shift in leak tests;
+--   rejected approved tests without NC;
+--   order-vs-control mismatches;
+--   NC origin/closure anomalies;
+--   recontrol actor/control/over-target anomalies;
+--   merma linkage/duplication anomalies;
+--   current use of normalized lot/box entities.
+--
+-- Authoritative implementation:
+-- Supabase migration iso_traceability_integrity_status
