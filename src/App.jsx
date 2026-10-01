@@ -124,7 +124,7 @@ const mapUserFromDb = (user) => {
     nombre: user.nombre,
     apellido: user.apellido,
     email: user.email ?? null,
-    rol: user.rol
+    rol: user.rol,
     forceChange: user.fuerza_cambio === true,         // schema real: fuerza_cambio
     maquinaAsignada: user.maquina_asignada ?? null,
     maquina_asignada: user.maquina_asignada ?? null,  // snake_case para compatibilidad con MVP
@@ -152,7 +152,6 @@ const normalizeUserInput = (user) => ({
   apellido: user.apellido,
   email: user.email || '',                 // FIX: email es NOT NULL en DB
   rol: user.rol,
-  password: user.password || '', // compatibilidad legacy; no se persiste
   forceChange: user.forceChange ?? user.force_change ?? user.fuerza_cambio ?? true,
   maquinaAsignada: user.maquinaAsignada ?? user.maquina_asignada ?? null,
   activo: user.activo ?? true,
@@ -299,16 +298,21 @@ const dataService = {
   },
 
   // Crea (o resetea) el usuario en Supabase Auth via función SECURITY DEFINER.
-    // Solo admins pueden llamarla. La contraseña temporal debe ser explícita y aleatoria.
-    async createAuthUser(legajo, password) {
-      if (!password || password.length < 12) return { ok: false, error: 'Contraseña temporal inválida' }
+  // Solo admins pueden llamarla. La contraseña temporal debe ser explícita y aleatoria.
+  async createAuthUser(legajo, password) {
+    if (!password || password.length < 12) {
+      return { ok: false, error: 'Contraseña temporal inválida' }
+    }
     const { data, error } = await supabase.rpc('admin_create_auth_user', {
-      p_legajo:   legajo.trim(),
+      p_legajo: legajo.trim(),
       p_password: password,
     })
-    console.log('createAuthUser rpc:', { legajo, data, error })
-    if (error) { console.error('createAuthUser:', error); return { ok: false, error: error.message } }
-    return data  // { ok: true, user_id, email } | { ok: false, error }
+    console.log('createAuthUser rpc:', { legajo, ok: data?.ok === true, error })
+    if (error) {
+      console.error('createAuthUser:', error)
+      return { ok: false, error: error.message }
+    }
+    return data
   },
 
   // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
