@@ -1,0 +1,105 @@
+name: Manual encrypted off-site backup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      BACKUP_AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT }}
+
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_DB_URL"
+          test -n "$R2_ENDPOINT"
+          test -n "$R2_BUCKET"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$BACKUP_AGE_RECIPIENT"
+
+      - name: Install PostgreSQL 17 client and age
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg age
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          CODENAME=$( . /etc/os-release && echo "$VERSION_CODENAME" )
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $CODENAME-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Create encrypted backup and audit anchor
+        id: backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS=$(date -u +'%Y%m%dT%H%M%SZ')
+          DUMP="sides-$TS.dump"
+          ENC="$DUMP.age"
+          CHECKSUM="$ENC.sha256"
+          ANCHOR="audit-anchor-$TS.json"
+          MANIFEST="backup-manifest-$TS.json"
+
+          pg_dump "$SUPABASE_DB_URL" --format=custom --no-owner --no-privileges --file="$DUMP"
+
+          psql "$SUPABASE_DB_URL" -X -A -t -c "
+            select jsonb_build_object(
+              'captured_at_utc', clock_timestamp(),
+              'chain_version', chain_version,
+              'chain_seq', chain_seq,
+              'hash_evento', hash_evento
+            )
+            from public.audit_log
+            where chain_version=2
+            order by chain_seq desc
+            limit 1;
+          " > "$ANCHOR"
+
+          age -r "$BACKUP_AGE_RECIPIENT" -o "$ENC" "$DUMP"
+          sha256sum "$ENC" > "$CHECKSUM"
+
+          jq -n             --arg captured_at_utc "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"             --arg pg_dump_version "$(pg_dump --version)"             --arg encrypted_backup "$ENC"             --arg checksum "$CHECKSUM"             --arg audit_anchor "$ANCHOR"             '{captured_at_utc:$captured_at_utc,pg_dump_version:$pg_dump_version,encrypted_backup:$encrypted_backup,checksum:$checksum,audit_anchor:$audit_anchor}' > "$MANIFEST"
+
+          shred -u "$DUMP" || rm -f "$DUMP"
+
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+          echo "enc=$ENC" >> "$GITHUB_OUTPUT"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "anchor=$ANCHOR" >> "$GITHUB_OUTPUT"
+          echo "manifest=$MANIFEST" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Cloudflare R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="SIDES/${{ steps.backup.outputs.ts }}"
+          aws s3 cp "${{ steps.backup.outputs.enc }}" "s3://$R2_BUCKET/$PREFIX/${{ steps.backup.outputs.enc }}" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "${{ steps.backup.outputs.checksum }}" "s3://$R2_BUCKET/$PREFIX/${{ steps.backup.outputs.checksum }}" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "${{ steps.backup.outputs.anchor }}" "s3://$R2_BUCKET/$PREFIX/${{ steps.backup.outputs.anchor }}" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "${{ steps.backup.outputs.manifest }}" "s3://$R2_BUCKET/$PREFIX/${{ steps.backup.outputs.manifest }}" --endpoint-url "$R2_ENDPOINT"
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "## SIDES off-site backup" >> "$GITHUB_STEP_SUMMARY"
+          echo "- UTC: ${{ steps.backup.outputs.ts }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Encrypted dump: ${{ steps.backup.outputs.enc }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Audit anchor: ${{ steps.backup.outputs.anchor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Restore test remains mandatory before enabling a schedule." >> "$GITHUB_STEP_SUMMARY"
