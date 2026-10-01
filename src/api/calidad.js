@@ -277,14 +277,11 @@ export async function guardarControl({
   ]
   const { data, error } = await supabase.rpc('guardar_control_calidad', {
     p: {
-      id_maquina: maquinaId,
+      // La orden es la fuente de verdad server-side para máquina, producto,
+      // lote, cliente y especificación. El cliente sólo identifica la orden.
       orden_maquina_id: orden.orden_maquina_id || '',
       sesion_calidad_id: sesion.uuid || '',
-      especifc_producto_id: orden.especifc_producto_id || '',
       numero_caja: nroCaja,
-      numero_lote: orden.lote,
-      nombre_producto: orden.producto,
-      cliente: orden.cliente,
       orden_id: orden.orden_id || '',
       sesion_id: sesion.id,
       no_conforme: noConforme,
