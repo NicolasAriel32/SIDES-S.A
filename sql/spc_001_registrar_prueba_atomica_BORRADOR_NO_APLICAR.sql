@@ -11,6 +11,16 @@ ALTER TABLE public.pruebas
   ADD COLUMN IF NOT EXISTS spc_cabezales_inspeccionados integer,
   ADD COLUMN IF NOT EXISTS spc_uso_estadistico text;
 
+-- En esta fase no se acepta ninguna atribucion de origen OT ni aptitud SPC.
+-- NOT VALID evita revalidar filas historicas; aplica a escrituras nuevas.
+ALTER TABLE public.pruebas
+  ADD CONSTRAINT pruebas_spc_origen_manual_chk
+    CHECK (spc_origen_evento IS NULL OR spc_origen_evento = 'MANUAL_NO_OT') NOT VALID,
+  ADD CONSTRAINT pruebas_spc_no_validado_chk
+    CHECK (spc_uso_estadistico IS NULL OR spc_uso_estadistico = 'NO_VALIDADO') NOT VALID,
+  ADD CONSTRAINT pruebas_spc_n20_chk
+    CHECK (spc_cabezales_inspeccionados IS NULL OR spc_cabezales_inspeccionados = 20) NOT VALID;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pruebas_spc_request
   ON public.pruebas (spc_request_id);
 -- PostgreSQL permite múltiples NULL en este índice: no afecta las filas históricas.
@@ -26,7 +36,9 @@ AS $function$
 DECLARE
   v_request_id uuid;
   v_hash text;
-  v_actor record;
+  v_actor_rol text;
+  v_actor_legajo text;
+  v_actor_maquina text;
   v_maquina text;
   v_producto text;
   v_caja text;
@@ -55,10 +67,10 @@ BEGIN
     RAISE EXCEPTION 'No autenticado';
   END IF;
   SELECT u.rol, u.legajo, u.maquina_asignada
-    INTO v_actor
+    INTO v_actor_rol, v_actor_legajo, v_actor_maquina
     FROM public.usuarios u
    WHERE u.id = auth.uid() AND u.activo = true;
-  IF NOT FOUND OR v_actor.rol NOT IN ('operario','supervisor','inspector','admin') THEN
+  IF NOT FOUND OR v_actor_rol NOT IN ('operario','supervisor','inspector','admin') THEN
     RAISE EXCEPTION 'Usuario no autorizado para registrar pruebas de estanqueidad';
   END IF;
 
@@ -83,7 +95,7 @@ BEGIN
   IF v_maquina IS NULL OR NOT EXISTS (SELECT 1 FROM public.maquinas m WHERE m.id = v_maquina AND m.activa IS DISTINCT FROM false) THEN
     RAISE EXCEPTION 'Máquina inexistente o inactiva';
   END IF;
-  IF v_actor.rol = 'operario' AND v_actor.maquina_asignada IS DISTINCT FROM v_maquina THEN
+  IF v_actor_rol = 'operario' AND v_actor_maquina IS DISTINCT FROM v_maquina THEN
     RAISE EXCEPTION 'El operario sólo puede registrar su máquina asignada';
   END IF;
   IF jsonb_typeof(v_tipos) <> 'array' OR jsonb_typeof(v_cantidades) <> 'object' THEN
@@ -156,7 +168,7 @@ BEGIN
    WHERE spc_request_id = v_request_id;
   IF FOUND THEN
     IF v_existente.spc_payload_hash IS DISTINCT FROM v_hash OR
-       v_existente.operario_legajo IS DISTINCT FROM v_actor.legajo THEN
+       v_existente.operario_legajo IS DISTINCT FROM v_actor_legajo THEN
       RAISE EXCEPTION 'Solicitud duplicada con contenido o autor diferente';
     END IF;
     RETURN jsonb_build_object('prueba_id',v_existente.id,
@@ -173,7 +185,7 @@ BEGIN
   ) VALUES (
     v_maquina, v_inicio, v_producto, v_caja, v_lote,
     v_estado, v_estado = 'RECHAZADO', v_n, NULLIF(p->>'observaciones',''),
-    v_actor.legajo,
+    v_actor_legajo,
     CASE WHEN v_auto THEN 'PENDIENTE'
          WHEN v_estado = 'RECHAZADO' THEN 'PENDIENTE_APROBACION'
          ELSE 'OK' END,
@@ -188,7 +200,7 @@ BEGIN
       INTO v_existente FROM public.pruebas
      WHERE spc_request_id = v_request_id;
     IF NOT FOUND OR v_existente.spc_payload_hash IS DISTINCT FROM v_hash OR
-       v_existente.operario_legajo IS DISTINCT FROM v_actor.legajo THEN
+       v_existente.operario_legajo IS DISTINCT FROM v_actor_legajo THEN
       RAISE EXCEPTION 'Conflicto de solicitud: verificar duplicados';
     END IF;
     RETURN jsonb_build_object('prueba_id',v_existente.id,
