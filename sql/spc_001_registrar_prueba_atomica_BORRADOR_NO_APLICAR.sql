@@ -12,8 +12,8 @@ ALTER TABLE public.pruebas
   ADD COLUMN IF NOT EXISTS spc_uso_estadistico text;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pruebas_spc_request
-  ON public.pruebas (spc_request_id)
-  WHERE spc_request_id IS NOT NULL;
+  ON public.pruebas (spc_request_id);
+-- PostgreSQL permite múltiples NULL en este índice: no afecta las filas históricas.
 
 -- SECURITY INVOKER conserva RLS y permisos del usuario autenticado.
 -- No hay elevación de privilegios ni escritura industrial.
