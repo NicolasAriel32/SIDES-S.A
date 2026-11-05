@@ -2154,7 +2154,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
   };
 
-  // FIX v5: botón manual para simular la señal del PLC
+  // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
     if (!maquinaInfo?.id) return;
     const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
@@ -2172,7 +2172,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     await dataService.logEvent({
       accion: 'SIGNAL',
       usuario: `${user.nombre} ${user.apellido}`,
-      desc: `Señal simulada de PLC · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
+      desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
     });
   };
 
@@ -2444,9 +2444,9 @@ const VistaOperario = ({ t, user, refresh }) => {
         </div>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>PRUEBAS DEL TURNO</div>
+            <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>PRUEBAS DEL TURNO (REFERENCIA ESTIMADA)</div>
             <div style={{ fontFamily: 'JetBrains Mono', color: t.success, fontSize: 14, fontWeight: 500 }}>
-              {pruebasDelTurno.filter(t => t.estado !== 'PENDIENTE').length} de {PRUEBAS_POR_TURNO}
+              {pruebasDelTurno.filter(t => t.estado !== 'PENDIENTE').length} / {PRUEBAS_POR_TURNO} orientativas
             </div>
           </div>
           <button onClick={() => setShowHistorial(true)} style={{
@@ -2490,11 +2490,11 @@ const VistaOperario = ({ t, user, refresh }) => {
             <Cpu size={32} color={t.textMuted} />
           </div>
           <h2 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 26, color: t.text, fontWeight: 600 }}>
-            Esperando señal del PLC
+            Registro de estanqueidad — modo manual
           </h2>
           <p style={{ fontFamily: 'Manrope', color: t.textMuted, marginTop: 8, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto' }}>
-            Cuando la máquina <span style={{ fontFamily: 'JetBrains Mono', color: t.text }}>{maquinaInfo?.id || '—'}</span> emita la señal de prueba se va a habilitar el formulario.
-            Mientras tanto podés usar el botón de simulación para empezar la próxima prueba manualmente.
+            El aviso real aparece en la HMI Kinco de la máquina <span style={{ fontFamily: 'JetBrains Mono', color: t.text }}>{maquinaInfo?.id || '—'}</span>.
+            Este botón inicia un registro manual: no recibe datos del PLC ni verifica la hora del aviso.
           </p>
           <button onClick={generarSenalPLC} disabled={!maquinaInfo?.id} style={{
             marginTop: 24, padding: '14px 28px',
@@ -2506,10 +2506,10 @@ const VistaOperario = ({ t, user, refresh }) => {
             display: 'inline-flex', alignItems: 'center', gap: 8
           }}>
             <Zap size={16} />
-            Simular señal del PLC
+            Iniciar registro manual (simulado)
           </button>
           <div style={{ marginTop: 12, fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em' }}>
-            MODO PILOTO · BOTÓN MANUAL · REEMPLAZA AL PLC HASTA INTEGRACIÓN FÍSICA
+            MODO PILOTO · SIN CONEXIÓN KINCO/DELTA · HORA DE INICIO LOCAL NO VERIFICADA
           </div>
         </Card>
       ) : pruebaPendiente && (
@@ -2544,7 +2544,7 @@ const VistaOperario = ({ t, user, refresh }) => {
                   {pruebaPendiente.id}
                 </div>
                 <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 13, marginTop: 4 }}>
-                  Señal recibida {pruebaPendiente.fechaSenalFormateada} · 20 cabezales para evaluar
+                  Registro manual iniciado {pruebaPendiente.fechaSenalFormateada} · 20 cabezales · no es hora OT
                 </div>
                 {/* Aviso crítico a los 50 min */}
                 {tiempoTranscurrido >= 3000 && tiempoTranscurrido < LIMITE_PENDIENTE_SEG && (
@@ -3764,7 +3764,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`de ${idealAhora * machinesIntegradas.length} previstas`} />
+        <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`referencia orientativa: ${idealAhora * machinesIntegradas.length}`} />
         <KPI t={t} label="% pruebas con falla" value={tasaFalla === null ? '—' : `${tasaFalla}%`}
           sub={`${pruebasRechazadas} con falla / ${totalEvaluables} evaluables`} />
         <KPI t={t} label="Bloqueadas PENDIENTE" value={pruebasBloqueadas}
@@ -3807,7 +3807,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginBottom: 24 }}>
         <Card t={t} padding={20}>
-          <SectionHeader t={t} title="Progreso por máquina" sub={`Ideal a esta hora · ${idealAhora} pruebas por máquina`} />
+          <SectionHeader t={t} title="Progreso por máquina (estimado)" sub={`Referencia orientativa: ${idealAhora} pruebas por máquina · sin avisos OT verificados`} />
           <div style={{ marginTop: 16 }}>
             {machinesIntegradas.length === 0 ? (
               <EmptyState icon={Power} t={t}
