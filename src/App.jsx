@@ -2068,9 +2068,14 @@ const VistaOperario = ({ t, user, refresh }) => {
       // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
       // PENDIENTE automáticamente y el operario espera la próxima señal.
       const guardada = m?.id ? recuperarSenalConId(m.id) : null;
-      if (guardada?.fechaSenal) {
-        const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-        if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+      if (guardada) {
+        const evaluacion = evaluarSenalManual(guardada, m.id);
+        if (evaluacion.estado === 'INVALIDA') {
+          setErrorPendiente(evaluacion.motivo);
+          setPruebaPendiente(null);
+          return;
+        }
+        if (evaluacion.estado === 'VENCIDA') {
           const registrado = await registrarPendienteAuto(guardada, m.id);
           if (registrado) {
             setPruebaPendiente(null);
@@ -2105,9 +2110,13 @@ const VistaOperario = ({ t, user, refresh }) => {
     await recalcularContador(m.id, true);
     // restaurar señal persistida de esa máquina (si existe)
     const guardada = recuperarSenalConId(m.id);
-    if (guardada?.fechaSenal) {
-      const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-      if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+    if (guardada) {
+      const evaluacion = evaluarSenalManual(guardada, m.id);
+      if (evaluacion.estado === 'INVALIDA') {
+        setErrorPendiente(evaluacion.motivo);
+        return;
+      }
+      if (evaluacion.estado === 'VENCIDA') {
         if (!await registrarPendienteAuto(guardada, m.id)) {
           setPruebaPendiente(guardada);
           setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
