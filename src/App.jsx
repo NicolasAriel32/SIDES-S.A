@@ -1935,6 +1935,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [pruebaPendiente, setPruebaPendiente] = useState(null);
   const [tuvoFalla, setTuvoFalla] = useState(null);
   const [tiposSeleccionados, setTiposSeleccionados] = useState([]);
+  const [cantidadesTipos, setCantidadesTipos] = useState({});
   const [cabezalesFalla, setCabezalesFalla] = useState(0);
   const [codigoProducto, setCodigoProducto] = useState('');
   const [errorCodigo, setErrorCodigo] = useState('');
@@ -1997,6 +1998,14 @@ const VistaOperario = ({ t, user, refresh }) => {
   const persistirSenal = (maquinaId, senal) => { try { localStorage.setItem(claveSenal(maquinaId), JSON.stringify(senal)); } catch {} };
   const limpiarSenal   = (maquinaId) => { try { localStorage.removeItem(claveSenal(maquinaId)); } catch {} };
   const leerSenal      = (maquinaId) => { try { return JSON.parse(localStorage.getItem(claveSenal(maquinaId)) || 'null'); } catch { return null; } };
+  const recuperarSenalConId = (maquinaId) => {
+    const guardada = leerSenal(maquinaId);
+    if (!guardada || guardada.requestId) return guardada;
+    // Recuperar una señal local previa sin reescribir ninguna prueba histórica.
+    const migrada = { ...guardada, requestId: crypto.randomUUID() };
+    persistirSenal(maquinaId, migrada);
+    return migrada;
+  };
 
   // v7: registra una señal vencida como PENDIENTE (sin datos de carga) y la
   // limpia del almacenamiento local. Se usa al volver a entrar con una señal
@@ -2051,7 +2060,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
       // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
       // PENDIENTE automáticamente y el operario espera la próxima señal.
-      const guardada = m?.id ? leerSenal(m.id) : null;
+      const guardada = m?.id ? recuperarSenalConId(m.id) : null;
       if (guardada?.fechaSenal) {
         const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
         if (transcurrido >= LIMITE_PENDIENTE_SEG) {
@@ -2076,12 +2085,12 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
     setPruebaPendiente(null);
-    setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+    setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
     await recalcularContador(m.id, true);
     // restaurar señal persistida de esa máquina (si existe)
-    const guardada = leerSenal(m.id);
+    const guardada = recuperarSenalConId(m.id);
     if (guardada?.fechaSenal) {
       const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
       if (transcurrido >= LIMITE_PENDIENTE_SEG) await registrarPendienteAuto(guardada, m.id);
@@ -2099,6 +2108,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
       maquina: maquinaInfo.id,
       numeroSecuencial: numeroPrueba,
+      requestId: crypto.randomUUID(),
       fechaSenal: ahora.toISOString(),
       fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
     };
@@ -2162,7 +2172,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     setPruebaPendiente(null);
     setAutoGuardado(false);
     setTuvoFalla(null);
-    setTiposSeleccionados([]);
+    setTiposSeleccionados([]); setCantidadesTipos({});
     setCabezalesFalla(0);
     setCaja('');
     setLote('');
@@ -2267,7 +2277,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (tuvoFalla === null) return;
     const validez = validarResultadoEstanqueidad({
       estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
-      tipos: tiposSeleccionados, cabezalesFalla,
+      tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
     });
     if (!validez.ok) { alert(validez.mensaje); return; }
 
@@ -2279,7 +2289,7 @@ const VistaOperario = ({ t, user, refresh }) => {
         legajoOperario: user.legajo,
         estado: tuvoFalla ? 'RECHAZADO' : 'OK',
         caja, lote, codigoProducto, observaciones: obs,
-        tipos: tiposSeleccionados, cabezalesFalla,
+        tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
         esperandoAprobacion: tuvoFalla,
         timestamp: new Date().toISOString(),
       };
@@ -2303,7 +2313,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
       setShowSuccess(true);
       setTimeout(async () => {
-        setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+        setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
         setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
         setLoteAutocompletado(false);
         setShowSuccess(false);
@@ -2319,7 +2329,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const tieneCriticaSeleccionada = tiposSeleccionados.some(id => TIPOS_FALLA.find(tf => tf.id === id)?.gravedad === 'CRITICA');
   const validacionMuestra = validarResultadoEstanqueidad({
     estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
-    tipos: tiposSeleccionados, cabezalesFalla,
+    tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
   });
   const formularioValido = Boolean(codigoProducto && !errorCodigo && caja && lote && validacionMuestra.ok);
 
@@ -2558,7 +2568,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
             <Label t={t}>¿Tuvo falla? <Asterisk t={t} /></Label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
-              <button onClick={() => { setTuvoFalla(false); setTiposSeleccionados([]); setCabezalesFalla(0); }} style={{
+              <button onClick={() => { setTuvoFalla(false); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0); }} style={{
                 padding: '20px 16px', borderRadius: 8, cursor: 'pointer',
                 background: tuvoFalla === false ? t.successSoft : t.surfaceHi,
                 border: `2px solid ${tuvoFalla === false ? t.success : t.border}`,
@@ -2597,7 +2607,14 @@ const VistaOperario = ({ t, user, refresh }) => {
                     const checked = tiposSeleccionados.includes(tf.id);
                     return (
                       <button key={tf.id}
-                        onClick={() => setTiposSeleccionados(s => s.includes(tf.id) ? s.filter(x => x !== tf.id) : [...s, tf.id])}
+                        onClick={() => {
+                          setTiposSeleccionados(s => s.includes(tf.id) ? s.filter(x => x !== tf.id) : [...s, tf.id]);
+                          setCantidadesTipos(prev => {
+                            const next = { ...prev };
+                            if (checked) delete next[tf.id]; else next[tf.id] = '';
+                            return next;
+                          });
+                        }}
                         style={{
                           padding: '10px 12px', borderRadius: 6, cursor: 'pointer',
                           background: checked ? t.danger : t.surface,
@@ -2623,6 +2640,22 @@ const VistaOperario = ({ t, user, refresh }) => {
                     );
                   })}
                 </div>
+                {tiposSeleccionados.length > 0 && (
+                  <div style={{ marginTop: 14, display: 'grid', gap: 8 }}>
+                    <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 12 }}>
+                      Cabezales afectados por cada tipo (una unidad puede tener varios tipos):
+                    </div>
+                    {tiposSeleccionados.map(id => (
+                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, color: t.text, fontSize: 12 }}>
+                        <span style={{ flex: 1 }}>{TIPOS_FALLA.find(tf => tf.id === id)?.nombre || id}</span>
+                        <input aria-label={`Cabezales con falla ${id}`} type="number" min="1" max={Math.max(1, cabezalesFalla)} step="1"
+                          value={cantidadesTipos[id] ?? ''}
+                          onChange={e => setCantidadesTipos(c => ({ ...c, [id]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                          style={{ width: 76, padding: '7px 8px', background: t.surface, border: `1px solid ${t.border}`, color: t.text, borderRadius: 5, textAlign: 'center' }} />
+                      </label>
+                    ))}
+                  </div>
+                )}
                 <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, flex: 1 }}>¿Cuántos cabezales únicos tuvieron falla?</span>
                   <input type="number" min="1" max="20" step="1" value={cabezalesFalla} onChange={e => setCabezalesFalla(e.target.value === '' ? 0 : Number(e.target.value))} style={{
