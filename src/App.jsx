@@ -714,7 +714,7 @@ const dataService = {
       .from('pruebas')
       .select(`
         *,
-        fallas:pruebas_fallas(tipo_falla_id)
+        fallas:pruebas_fallas(tipo_falla_id, cantidad_items_afectados)
       `)
       .order('created_at', { ascending: false });
     // Si se pasa un timestamp de inicio de turno, filtramos en BD (más eficiente)
@@ -752,6 +752,9 @@ const dataService = {
         codigoProducto:      p.codigo_producto,
         observaciones:       p.observaciones,
         tipos:               p.fallas?.map(f => f.tipo_falla_id) || [],
+        cantidadesTipos:     p.spc_request_id ? Object.fromEntries((p.fallas || []).map(f => [f.tipo_falla_id, f.cantidad_items_afectados])) : null,
+        origenEvento:        p.spc_origen_evento ?? 'HISTORICO_NO_VERIFICADO',
+        aptitudSpc:          p.spc_uso_estadistico ?? 'NO_VALIDADO',
         cabezalesFalla:      p.cantidad_cabezales_afectados ?? 0,
         tuvoFalla:           p.tuvo_falla === true,
         esperandoAprobacion: (p.tuvo_falla === true && ['PENDIENTE_APROBACION','REVISION_100_CAJA'].includes(p.estado_final)),
@@ -770,114 +773,46 @@ const dataService = {
   },
 
   async createTest(test) {
-    // Validacion de cliente; la futura RPC incorporara validacion autoritativa.
     const validez = validarResultadoEstanqueidad({
       estado: test.estado, tipos: test.tipos, cabezalesFalla: test.cabezalesFalla,
-      autoPendiente: test.autoPendiente === true,
+      cantidadesTipos: test.cantidadesTipos || {}, autoPendiente: test.autoPendiente === true,
     });
     if (!validez.ok) { this._ultimoError = validez.mensaje; return null; }
-    // 1) Verificar que la máquina exista (id_maquina es FK varchar)
-    const { data: maquina, error: maquinaError } = await supabase
-      .from('maquinas')
-      .select('id')
-      .eq('id', test.maquina)
-      .maybeSingle()
-
-    console.log('createTest maquina lookup:', { maquina, maquinaError, test })
-    this._ultimoError = null
-    if (maquinaError || !maquina) {
-      console.error('createTest: máquina no encontrada', { maquina: test.maquina, maquinaError })
-      this._ultimoError = maquinaError?.message || `máquina ${test.maquina} no encontrada`
-      return null
+    if (!test.requestId) { this._ultimoError = 'Solicitud sin identificador estable. Reabrí el registro manual.'; return null; }
+    this._ultimoError = null;
+    // SPC-001: sin fallback a inserts directos. La migracion debe probarse
+    // primero en staging. Ninguna escritura debe dejar fallas parciales.
+    const payload = {
+      request_id: test.requestId,
+      id_maquina: test.maquina,
+      fecha_inicio_manual: test.fechaSenal || null,
+      codigo_producto: test.codigoProducto || null,
+      numero_caja: test.caja || null,
+      numero_lote: test.lote || null,
+      resultado: test.autoPendiente ? 'PENDIENTE' : test.estado,
+      auto_pendiente: test.autoPendiente === true,
+      cabezales_afectados: test.cabezalesFalla || 0,
+      tipos: test.tipos || [],
+      cantidades_por_tipo: test.cantidadesTipos || {},
+      observaciones: test.observaciones || null,
+    };
+    const { data, error } = await supabase.rpc('registrar_prueba_estanqueidad_spc', { p: payload });
+    if (error || !data?.prueba_id) {
+      console.error('createTest RPC estanqueidad:', error);
+      this._ultimoError = error?.message || 'No se confirmó el registro de la prueba.';
+      return null;
     }
-// 2) Turno actual. El numero_secuencial lo asigna PostgreSQL mediante
-    // DEFAULT nextval(...); el cliente no consume la secuencia directamente.
-    const turnoId = await this.getTurnoActualId()
-
-    // 3) Mapeo de estado del modelo interno → resultado/estado_final del schema
-    // v6: si es auto-PENDIENTE (60 min sin carga), resultado queda null y estado_final='PENDIENTE'
-    const esPendienteAuto = test.autoPendiente === true
-    const tuvoFalla = esPendienteAuto ? false : (test.estado === 'RECHAZADO')
-    const resultado = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'RECHAZADO' : 'OK')  // FIX: columna NOT NULL
-    const estadoFinal = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'PENDIENTE_APROBACION' : 'OK')
-
-    // 4) Insert en pruebas
-    const { data: prueba, error } = await supabase
-      .from('pruebas')
-      .insert({
-        id_maquina:                   test.maquina,
-        fecha_hora:                   test.fechaSenal || new Date().toISOString(),
-        codigo_producto:              test.codigoProducto,
-        numero_caja:                  test.caja,
-        numero_lote:                  test.lote,
-        resultado:                    resultado,
-        tuvo_falla:                   tuvoFalla,
-        cantidad_cabezales_afectados: test.cabezalesFalla || 0,
-        observaciones:                test.observaciones || null,
-        operario_legajo:              test.legajoOperario,
-        estado_final:                 estadoFinal,
-        timestamp_recibida:           test.fechaSenal || new Date().toISOString(),
-        timestamp_completada:         new Date().toISOString(),
-        turno_id:                     turnoId
-        // hash_integridad y firma_criptografica quedan nulos (deuda ISO conocida)
-      })
-      .select()
-      .single()
-
-    console.log('createTest prueba insert response:', { prueba, error })
-    if (error) {
-      if (error.code === '23505') {
-        const timestampRecibida = test.fechaSenal || new Date().toISOString()
-        const { data: existente, error: existenteError } = await supabase
-          .from('pruebas')
-          .select('*')
-          .eq('id_maquina', test.maquina)
-          .eq('timestamp_recibida', timestampRecibida)
-          .eq('anulada', false)
-          .maybeSingle()
-
-        if (existenteError) {
-          console.error('createTest: error fetching existing duplicate prueba', existenteError)
-          return null
-        }
-
-        return existente
-      }
-
-      console.error('createTest:', error)
-      this._ultimoError = error.message
-      return null
+    const fecha = new Date(normalizarFechaUTC(test.fechaSenal || new Date().toISOString()));
+    const codigoHumano = `PRB-${fechaLocalAR(fecha).replace(/-/g, '')}-${String(data.numero_secuencial).padStart(4,'0')}`;
+    if (!data.duplicado) {
+      await this.logEvent({
+        accion: 'CREATE', usuario: test.operario, usuarioLegajo: test.legajoOperario,
+        desc: `Prueba ${codigoHumano} · ${payload.resultado} · origen manual no OT`,
+        tabla: 'pruebas', registroId: data.prueba_id,
+      });
     }
-
-    const numeroSec = prueba.numero_secuencial
-
-    // 5) Si hay fallas, insertarlas en pruebas_fallas con tipo_falla_id
-    if (test.tipos && test.tipos.length > 0) {
-      const { error: fallasErr } = await supabase
-        .from('pruebas_fallas')
-        .insert(
-          test.tipos.map(tipo => ({
-            prueba_id:                prueba.id,
-            tipo_falla_id:            tipo,
-            cantidad_items_afectados: 1
-          }))
-        )
-      if (fallasErr) console.error('createTest pruebas_fallas insert:', fallasErr)
-    }
-
-    // 6) Audit log
-    const codigoHumano = `PRB-${new Date(prueba.timestamp_recibida || Date.now())
-      .toISOString().slice(0,10).replace(/-/g,'')}-${String(numeroSec).padStart(4,'0')}`
-    await this.logEvent({
-      accion: 'CREATE',
-      usuario: test.operario,
-      usuarioLegajo: test.legajoOperario,
-      desc: `Prueba ${codigoHumano} · ${resultado}`,
-      tabla: 'pruebas',
-      registroId: prueba.id
-    })
-
-    return { ...test, id: codigoHumano, supabase_id: prueba.id, numeroSecuencial: numeroSec }
+    return { ...test, id: codigoHumano, supabase_id: data.prueba_id,
+             numeroSecuencial: data.numero_secuencial, repetido: data.duplicado === true };
   },
 
   // Actualiza una prueba. Se busca por código humano (PRB-...) o supabase_id (uuid).
@@ -1115,7 +1050,7 @@ const dataService = {
         prueba:pruebas!prueba_id(
           id, numero_secuencial, id_maquina, operario_legajo,
           observaciones, cantidad_cabezales_afectados, timestamp_recibida,
-          fallas:pruebas_fallas(tipo_falla_id)
+          fallas:pruebas_fallas(tipo_falla_id, cantidad_items_afectados)
         ),
         control_calidad:controles_calidad!control_calidad_id(
           id, id_maquina, nombre_producto, numero_lote,
