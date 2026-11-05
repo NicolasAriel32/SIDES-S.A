@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
+import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
 
 
 /* =================================================================
@@ -769,6 +770,12 @@ const dataService = {
   },
 
   async createTest(test) {
+    // Validacion de cliente; la futura RPC incorporara validacion autoritativa.
+    const validez = validarResultadoEstanqueidad({
+      estado: test.estado, tipos: test.tipos, cabezalesFalla: test.cabezalesFalla,
+      autoPendiente: test.autoPendiente === true,
+    });
+    if (!validez.ok) { this._ultimoError = validez.mensaje; return null; }
     // 1) Verificar que la máquina exista (id_maquina es FK varchar)
     const { data: maquina, error: maquinaError } = await supabase
       .from('maquinas')
@@ -2323,7 +2330,11 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
-    if (tuvoFalla === true && tiposSeleccionados.length === 0) return;
+    const validez = validarResultadoEstanqueidad({
+      estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
+      tipos: tiposSeleccionados, cabezalesFalla,
+    });
+    if (!validez.ok) { alert(validez.mensaje); return; }
 
     setSubmitting(true);
     try {
@@ -2371,7 +2382,11 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const tieneCriticaSeleccionada = tiposSeleccionados.some(id => TIPOS_FALLA.find(tf => tf.id === id)?.gravedad === 'CRITICA');
-  const formularioValido = codigoProducto && !errorCodigo && caja && lote && tuvoFalla !== null && (tuvoFalla === false || tiposSeleccionados.length > 0);
+  const validacionMuestra = validarResultadoEstanqueidad({
+    estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
+    tipos: tiposSeleccionados, cabezalesFalla,
+  });
+  const formularioValido = Boolean(codigoProducto && !errorCodigo && caja && lote && validacionMuestra.ok);
 
   const PRUEBAS_POR_TURNO = 8;
 
@@ -2674,14 +2689,19 @@ const VistaOperario = ({ t, user, refresh }) => {
                   })}
                 </div>
                 <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, flex: 1 }}>¿Cuántos cabezales con falla?</span>
-                  <input type="number" min="0" max="20" value={cabezalesFalla} onChange={e => setCabezalesFalla(parseInt(e.target.value || 0))} style={{
+                  <span style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, flex: 1 }}>¿Cuántos cabezales únicos tuvieron falla?</span>
+                  <input type="number" min="1" max="20" step="1" value={cabezalesFalla} onChange={e => setCabezalesFalla(e.target.value === '' ? 0 : Number(e.target.value))} style={{
                     width: 70, padding: '6px 10px', borderRadius: 4,
                     background: t.surface, border: `1px solid ${t.border}`,
                     color: t.text, textAlign: 'center', fontFamily: 'JetBrains Mono', fontSize: 14
                   }} />
                   <span style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: t.textMuted }}>de 20</span>
                 </div>
+                {!validacionMuestra.ok && (
+                  <div role="alert" style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, marginTop: 10 }}>
+                    {validacionMuestra.mensaje}
+                  </div>
+                )}
               </div>
             )}
 
@@ -3484,7 +3504,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const pruebasRechazadas = tests.filter(t => t.estado === 'RECHAZADO').length;
   // Pruebas que quedaron bloqueadas en PENDIENTE (no se pueden modificar)
   const pruebasBloqueadas = tests.filter(t => t.estadoFinal === 'PENDIENTE').length;
-  const tasaFalla = totalPruebas > 0 ? Math.round((pruebasRechazadas / totalPruebas) * 100) : 0;
+  const { evaluables: totalEvaluables, porcentajeConFalla: tasaFalla } = resumirPruebasConFalla(tests);
   const totalIncidenciasTipos = paretoTurno.reduce((s, p) => s + p.cantidad, 0);
 
   // v7: KPI de NC removido — las NC se gestionan en Control de Calidad
@@ -3745,14 +3765,13 @@ const VistaSupervisor = ({ t, currentUser }) => {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
         <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`de ${idealAhora * machinesIntegradas.length} previstas`} />
-        <KPI t={t} label="Tasa de falla" value={`${tasaFalla}%`}
-          sub={`${pruebasRechazadas} rechazos / ${totalPruebas} pruebas`}
-          tone={tasaFalla > 5 ? 'warn' : 'success'} />
+        <KPI t={t} label="% pruebas con falla" value={tasaFalla === null ? '—' : `${tasaFalla}%`}
+          sub={`${pruebasRechazadas} con falla / ${totalEvaluables} evaluables`} />
         <KPI t={t} label="Bloqueadas PENDIENTE" value={pruebasBloqueadas}
           sub={pruebasBloqueadas > 0 ? 'sin registro · no modificables' : 'ninguna este turno'}
           tone={pruebasBloqueadas > 0 ? 'danger' : 'success'} />
         <KPI t={t} label="Pruebas OK" value={pruebasOK}
-          sub={totalPruebas > 0 ? `${Math.round((pruebasOK / totalPruebas) * 100)}% del turno` : 'sin pruebas aún'}
+          sub={totalEvaluables > 0 ? `${Math.round((pruebasOK / totalEvaluables) * 100)}% de pruebas evaluables` : 'sin pruebas evaluables'}
           tone="success" />
       </div>
 
@@ -3819,9 +3838,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
           {/* Encabezado + selector de ventana */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
             <div>
-              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>Pareto de fallas</div>
+              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>Tipos de falla reportados por prueba</div>
               <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginTop: 2 }}>
-                {totalIncidenciasTipos} {totalIncidenciasTipos === 1 ? 'incidencia' : 'incidencias'} · {
+                {totalIncidenciasTipos} {totalIncidenciasTipos === 1 ? 'mención' : 'menciones'} (no cantidad de defectos) · {
                   ventanaPareto === 'turno' ? 'turno actual' :
                   ventanaPareto === 'semana' ? 'últimos 7 días' : 'últimos 30 días'
                 }
