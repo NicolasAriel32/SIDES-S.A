@@ -805,11 +805,15 @@ const dataService = {
     const fecha = new Date(normalizarFechaUTC(test.fechaSenal || new Date().toISOString()));
     const codigoHumano = `PRB-${fechaLocalAR(fecha).replace(/-/g, '')}-${String(data.numero_secuencial).padStart(4,'0')}`;
     if (!data.duplicado) {
-      await this.logEvent({
-        accion: 'CREATE', usuario: test.operario, usuarioLegajo: test.legajoOperario,
-        desc: `Prueba ${codigoHumano} · ${payload.resultado} · origen manual no OT`,
-        tabla: 'pruebas', registroId: data.prueba_id,
-      });
+      try {
+        await this.logEvent({
+          accion: 'CREATE', usuario: test.operario, usuarioLegajo: test.legajoOperario,
+          desc: `Prueba ${codigoHumano} · ${payload.resultado} · origen manual no OT`,
+          tabla: 'pruebas', registroId: data.prueba_id,
+        });
+      } catch (auditError) {
+        console.warn('El registro se confirmó, pero falló el log complementario:', auditError);
+      }
     }
     return { ...test, id: codigoHumano, supabase_id: data.prueba_id,
              numeroSecuencial: data.numero_secuencial, repetido: data.duplicado === true };
@@ -1953,6 +1957,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState(0);
   // v6: flag para que el auto-guardado de PENDIENTE (60 min) solo se ejecute una vez
   const [autoGuardado, setAutoGuardado] = useState(false);
+  const [errorPendiente, setErrorPendiente] = useState('');
 
   // CAMBIO v4: estados para mensajes del supervisor
   const [observaciones, setObservaciones] = useState([]);
@@ -2019,25 +2024,28 @@ const VistaOperario = ({ t, user, refresh }) => {
         estado: 'PENDIENTE',
         caja: null, lote: null, codigoProducto: null,
         observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
-        tipos: [], cabezalesFalla: 0, esperandoAprobacion: false,
+        tipos: [], cantidadesTipos: {}, cabezalesFalla: 0, esperandoAprobacion: false,
         timestamp: new Date().toISOString(),
         autoPendiente: true,
       };
       const inserted = await dataService.createTest(test);
-      if (inserted) {
+      if (!inserted) return false;
+      try {
         await dataService.logEvent({
-          accion: 'AUTO_PENDIENTE',
-          usuario: `${user.nombre} ${user.apellido}`,
+          accion: 'AUTO_PENDIENTE', usuario: `${user.nombre} ${user.apellido}`,
           usuarioLegajo: user.legajo,
-          desc: `Prueba ${senal.id} auto-registrada como PENDIENTE · 60 min sin carga (detectado al reingresar)`,
-          tabla: 'pruebas',
-          registroId: inserted.supabase_id,
+          desc: `Prueba ${senal.id} auto-registrada como PENDIENTE · 60 min sin carga (al reingresar)`,
+          tabla: 'pruebas', registroId: inserted.supabase_id,
         });
+      } catch (auditError) {
+        console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
+      limpiarSenal(maquinaId);
+      return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
+      return false;
     }
-    limpiarSenal(maquinaId);
   };
 
   useEffect(() => {
@@ -2064,10 +2072,16 @@ const VistaOperario = ({ t, user, refresh }) => {
       if (guardada?.fechaSenal) {
         const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
         if (transcurrido >= LIMITE_PENDIENTE_SEG) {
-          await registrarPendienteAuto(guardada, m.id);
-          setPruebaPendiente(null);
-          if (m?.id) await recalcularContador(m.id);
-          refresh();
+          const registrado = await registrarPendienteAuto(guardada, m.id);
+          if (registrado) {
+            setPruebaPendiente(null);
+            if (m?.id) await recalcularContador(m.id);
+            refresh();
+          } else {
+            setPruebaPendiente(guardada);
+            setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
+            setAutoGuardado(true);
+          }
         } else {
           setPruebaPendiente(guardada);   // el reloj sigue desde la señal original
         }
@@ -2085,6 +2099,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
     setPruebaPendiente(null);
+    setAutoGuardado(false); setErrorPendiente('');
     setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
@@ -2093,8 +2108,13 @@ const VistaOperario = ({ t, user, refresh }) => {
     const guardada = recuperarSenalConId(m.id);
     if (guardada?.fechaSenal) {
       const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-      if (transcurrido >= LIMITE_PENDIENTE_SEG) await registrarPendienteAuto(guardada, m.id);
-      else setPruebaPendiente(guardada);
+      if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+        if (!await registrarPendienteAuto(guardada, m.id)) {
+          setPruebaPendiente(guardada);
+          setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
+          setAutoGuardado(true);
+        }
+      } else setPruebaPendiente(guardada);
     }
   };
 
@@ -2137,48 +2157,47 @@ const VistaOperario = ({ t, user, refresh }) => {
   const autoGuardarComoPendiente = async () => {
     if (!pruebaPendiente || autoGuardado) return;
     setAutoGuardado(true);
+    setErrorPendiente('');
     try {
       const test = {
         ...pruebaPendiente,
         operario: `${user.nombre} ${user.apellido}`,
         legajoOperario: user.legajo,
         estado: 'PENDIENTE',
-        caja: caja || null,
-        lote: lote || null,
-        codigoProducto: codigoProducto || null,
+        caja: caja || null, lote: lote || null, codigoProducto: codigoProducto || null,
         observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
-        tipos: [],
-        cabezalesFalla: 0,
-        esperandoAprobacion: false,
-        timestamp: new Date().toISOString(),
-        autoPendiente: true,
+        tipos: [], cantidadesTipos: {}, cabezalesFalla: 0,
+        esperandoAprobacion: false, timestamp: new Date().toISOString(), autoPendiente: true,
       };
       const inserted = await dataService.createTest(test);
-      if (inserted) {
+      if (!inserted) {
+        setErrorPendiente(dataService._ultimoError || 'No se guardó la prueba pendiente. Se conservó la señal local.');
+        return; // No borrar ni liberar para reintentos automáticos en bucle.
+      }
+      try {
         await dataService.logEvent({
-          accion: 'AUTO_PENDIENTE',
-          usuario: `${user.nombre} ${user.apellido}`,
+          accion: 'AUTO_PENDIENTE', usuario: `${user.nombre} ${user.apellido}`,
           usuarioLegajo: user.legajo,
           desc: `Prueba ${pruebaPendiente.id} auto-registrada como PENDIENTE · 60 min sin carga`,
-          tabla: 'pruebas',
-          registroId: inserted.supabase_id,
+          tabla: 'pruebas', registroId: inserted.supabase_id,
         });
+      } catch (auditError) {
+        console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
     } catch (e) {
       console.error('autoGuardarComoPendiente:', e);
+      setErrorPendiente('No se pudo confirmar el registro pendiente. Se conservó la señal local.');
+      return;
     }
-    // Resetear form
-    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: la señal vencida no debe revivir al recargar
+    // Sólo limpiar la señal cuando la RPC confirmó el registro.
+    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);
     setPruebaPendiente(null);
     setAutoGuardado(false);
+    setErrorPendiente('');
     setTuvoFalla(null);
     setTiposSeleccionados([]); setCantidadesTipos({});
     setCabezalesFalla(0);
-    setCaja('');
-    setLote('');
-    setObs('');
-    setCodigoProducto('');
-    setErrorCodigo('');
+    setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
     refresh();
   };
@@ -2188,7 +2207,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (tiempoTranscurrido >= LIMITE_PENDIENTE_SEG) {
       autoGuardarComoPendiente();
     }
-  }, [tiempoTranscurrido]);
+  }, [tiempoTranscurrido, autoGuardado]);
 
   // CAMBIO v4: Polling cada 15 segundos + Realtime como respaldo
   // Usamos operario_legajo porque no tenemos Supabase Auth (piloto sin JWT)
@@ -2297,18 +2316,12 @@ const VistaOperario = ({ t, user, refresh }) => {
       const inserted = await dataService.createTest(test);
       if (!inserted) {
         alert(
-          'No se pudo registrar la prueba.\n\n' +
-          (dataService._ultimoError ? `Detalle: ${dataService._ultimoError}\n\n` : '') +
-          `Verificá que la máquina ${test.maquina} esté creada en la tabla "maquinas" ` +
-          'y que el legajo del operario exista en "usuarios".'
+          'No se pudo registrar la prueba. No se descartó la solicitud; podés reintentar.\n\n' +
+          (dataService._ultimoError ? `Detalle: ${dataService._ultimoError}` : 'Revisá la conexión y los permisos de la cuenta.')
         );
         return;
       }
-      await dataService.logEvent({
-        accion: 'CREATE', usuario: `${user.nombre} ${user.apellido}`,
-        desc: `Prueba ${inserted.id} · ${test.estado} · ${codigoProducto}`
-      });
-
+      // La RPC y los triggers guardan la evidencia; createTest hace log complementario.
       if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: prueba cargada → señal consumida
 
       setShowSuccess(true);
@@ -2459,6 +2472,15 @@ const VistaOperario = ({ t, user, refresh }) => {
         </Card>
       ) : pruebaPendiente && (
         <>
+          {errorPendiente && (
+            <div role="alert" style={{ padding: 14, marginBottom: 12, background: t.dangerSoft, border: `1px solid ${t.danger}`, borderRadius: 8 }}>
+              <p style={{ color: t.danger, margin: '0 0 8px' }}>{errorPendiente}</p>
+              <button type="button" onClick={() => { setErrorPendiente(''); setAutoGuardado(false); }}
+                style={{ padding: '8px 12px', borderRadius: 5, background: t.surfaceHi, color: t.text, border: `1px solid ${t.border}`, cursor: 'pointer' }}>
+                Reintentar guardar pendiente
+              </button>
+            </div>
+          )}
           <Card t={t} padding={24} style={{
             background: `linear-gradient(135deg, ${tiempoTranscurrido >= 3000 ? t.dangerSoft : t.warnSoft} 0%, ${t.surface} 60%)`,
             borderColor: (tiempoTranscurrido >= 3000 ? t.danger : t.warn) + '80',
