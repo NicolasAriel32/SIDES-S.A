@@ -20,6 +20,7 @@ import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
+import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
 
 
 /* =================================================================
@@ -1975,6 +1976,20 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [errorPendiente, setErrorPendiente] = useState('');
   const [errorBorrador, setErrorBorrador] = useState('');
   const borradorHidratado = useRef(null);
+  const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
+  const [revisionEditor, setRevisionEditor] = useState(0);
+  useEffect(() => {
+    const id = pruebaPendiente?.requestId;
+    if (!id || !pruebaPendiente?.maquina) {
+      setPermisoEditor({ requestId: null, ok: false });
+      return;
+    }
+    let vigente = true;
+    setPermisoEditor({ requestId: id, ok: false });
+    const reserva = reservarEditorExclusivo(navigator.locks, user.legajo, pruebaPendiente.maquina, id);
+    reserva.listo.then(ok => { if (vigente) setPermisoEditor({ requestId: id, ok }); });
+    return () => { vigente = false; reserva.soltar(); };
+  }, [pruebaPendiente?.requestId, pruebaPendiente?.maquina, user.legajo, revisionEditor]);
 
   // CAMBIO v4: estados para mensajes del supervisor
   const [observaciones, setObservaciones] = useState([]);
@@ -2032,15 +2047,16 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
+  const editorActivo = permisoEditor.ok && permisoEditor.requestId === pruebaPendiente?.requestId;
   useEffect(() => {
-    if (!pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
+    if (!editorActivo || !pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
     const campos = { tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs };
     if (!almacenBorradores.guardar(pruebaPendiente.maquina, pruebaPendiente.requestId, campos)) {
       setErrorBorrador('No se pudo conservar el formulario local. No cierres esta pestaña.');
     } else if (!errorBorrador.startsWith('Existe un borrador')) {
       setErrorBorrador('');
     }
-  }, [pruebaPendiente?.requestId, tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs]);
+  }, [editorActivo, pruebaPendiente?.requestId, tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs]);
   const limpiarSenal = (maquinaId, requestId) => almacenSenales.eliminarSiCoincide(maquinaId, requestId);
   const recuperarSenalConId = (maquinaId) => {
     const { senal: guardada, error } = almacenSenales.leer(maquinaId);
@@ -2222,7 +2238,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
-    if (!pruebaPendiente || autoGuardado) return;
+    if (!pruebaPendiente || autoGuardado || !editorActivo) return;
     const { borrador, error } = almacenBorradores.leer(pruebaPendiente.maquina, pruebaPendiente.requestId);
     if (error || borradorTieneCarga(borrador)) {
       setErrorBorrador(error || 'Hay datos cargados. No se registró un PENDIENTE automático.');
@@ -2368,7 +2384,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
-    if (submitting || !pruebaPendiente?.requestId || errorBorrador) return;
+    if (submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
@@ -2643,7 +2659,16 @@ const VistaOperario = ({ t, user, refresh }) => {
             </div>
           </Card>
 
+          {!editorActivo && (
+            <div role="alert" style={{ padding: 14, border: `1px solid ${t.warn}`, borderRadius: 8, marginBottom: 12, background: t.warnSoft, color: t.text }}>
+              Este registro está en modo solo lectura mientras verificamos el permiso de edición en esta pestaña. Si otra ventana lo está usando, cerrala antes de continuar.
+              <button type="button" onClick={() => setRevisionEditor(n => n + 1)} style={{ display: 'block', padding: '8px 12px', marginTop: 8, borderRadius: 6, background: t.surfaceHi, color: t.text, border: `1px solid ${t.border}`, cursor: 'pointer' }}>
+                Volver a intentar editar
+              </button>
+            </div>
+          )}
           <Card t={t} padding={28}>
+            <fieldset disabled={!editorActivo} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
             <h3 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 18, color: t.text, fontWeight: 600, marginBottom: 6 }}>
               Cargá el resultado
             </h3>
@@ -2825,6 +2850,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             }}>
               {submitting ? 'Guardando...' : 'Guardar resultado'}<ChevronRight size={18} />
             </button>
+            </fieldset>
           </Card>
         </>
       )}
