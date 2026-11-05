@@ -28,3 +28,21 @@ Esta rama nace de `feature/spc-001-fase1-integridad-ui`, **no de main**. Ningún
 - Dos pestañas no pueden confirmar dos resultados distintos para la misma señal.
 - El operador distingue claramente `pendiente de enviar`, `confirmado` y `requiere intervención`.
 - No se crean pruebas OT certificadas ni se modifica el histórico.
+
+## Iteración 2 — Borrador del formulario (commits en esta rama)
+
+- Se agregó `src/domain/borradorEstanqueidad.js`: almacenamiento local por legajo + máquina + `requestId`, versión 1, lectura, escritura y borrado condicional.
+- Se restauran resultado, tipos, cantidades, cabezales afectados, producto, caja, lote y observaciones cuando vuelve a abrirse una señal manual.
+- El borrador se conserva durante errores de red y se elimina sólo después de confirmación de la RPC. No hay transmisión automática.
+- Si hay carga parcial, el vencimiento de 60 minutos **no genera automáticamente un PENDIENTE** ni descarta el borrador. El operador debe revisar la situación.
+- Se muestra aviso de errores de persistencia en el formulario.
+- Pruebas unitarias adicionales de restauración, aislamiento, borrado condicional, detección de carga parcial y fallo de almacenamiento.
+
+### Riesgos abiertos (no declarar apto para producción)
+
+- El almacenamiento local es `localStorage` y no es una cola transaccional; no garantiza protección frente a eliminación del navegador, falta de espacio o uso simultáneo de pestañas.
+- Los datos de prueba pueden ser sensibles y el almacenamiento del navegador no está cifrado por la aplicación; se debe definir política de retención y de dispositivos compartidos antes del deploy.
+- El borrador aún no cuenta con reconciliación server-side de estado ambiguo tras timeout de RPC.
+- La recuperación automática de un borrador malformado requiere intervención manual; no se elimina silenciosamente.
+- No hay sesión real de Supabase Auth validada desde el navegador ni pruebas E2E móviles.
+- No se cambió la base productiva ni se desplegó.
