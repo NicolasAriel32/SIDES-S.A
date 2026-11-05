@@ -46,3 +46,17 @@ Esta rama nace de `feature/spc-001-fase1-integridad-ui`, **no de main**. Ningún
 - La recuperación automática de un borrador malformado requiere intervención manual; no se elimina silenciosamente.
 - No hay sesión real de Supabase Auth validada desde el navegador ni pruebas E2E móviles.
 - No se cambió la base productiva ni se desplegó.
+
+## Iteración 3 — Exclusión entre pestañas y ACK ambiguo
+
+- `src/domain/reconciliacionPruebas.js`: bloqueo exclusivo por legajo, máquina y UUID con `navigator.locks`, `ifAvailable`, sin espera indefinida. Si el navegador no soporta Web Locks, **se bloquea el envío** (fail-closed); no se simula exclusión con localStorage.
+- La función de guardado del frontend utiliza ese bloqueo para el registro normal y el pendiente automático. El bloqueo cubre el envío y la verificación del resultado, no el tiempo de edición del formulario.
+- Ante error de RPC o ACK perdido se consulta `pruebas.spc_request_id` con las credenciales actuales. Si se encuentra la fila, se trata como confirmación y no se repite la escritura. Si falla la lectura o no aparece, se conserva el UUID y el formulario para revisión/reintento manual; **no hay reintentos automáticos**.
+- Nuevos tests unitarios de exclusión, bloqueo no disponible y estados de reconciliación.
+
+### Riesgos que impiden desplegar
+
+- Las políticas RLS reales deben permitir a un operario consultar **su propia prueba por UUID**; sin esa política, la lectura puede devolver cero filas y la reconciliación no es concluyente. El servidor mantiene idempotencia por UUID, pero falta un test de autorización real.
+- Web Locks cubre pestañas del mismo origen/perfil compatibles; no evita múltiples dispositivos. La idempotencia en PostgreSQL es la defensa global.
+- La recuperación del borrador sigue usando localStorage y no existe una outbox IndexedDB cifrada o con retención acordada.
+- No se verificó desde navegador real. La compatibilidad con dispositivos móviles requiere prueba E2E.
