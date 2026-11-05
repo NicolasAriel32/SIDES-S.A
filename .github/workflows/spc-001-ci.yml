@@ -1,0 +1,32 @@
+name: SPC-001 · validación de rama
+
+on:
+  pull_request:
+    paths:
+      - 'src/App.jsx'
+      - 'src/domain/estanqueidad.js'
+      - 'tests/estanqueidad.test.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/spc-001-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Pruebas y build sin despliegue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependencias congeladas
+        run: npm ci
+      - name: Pruebas unitarias SPC
+        run: npm test
+      - name: Compilar frontend
+        run: npm run build
