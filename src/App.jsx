@@ -16,6 +16,7 @@ import {
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
+import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
 
 
 /* =================================================================
@@ -782,21 +783,14 @@ const dataService = {
     this._ultimoError = null;
     // SPC-001: sin fallback a inserts directos. La migracion debe probarse
     // primero en staging. Ninguna escritura debe dejar fallas parciales.
-    const payload = {
-      request_id: test.requestId,
-      id_maquina: test.maquina,
-      fecha_inicio_manual: test.fechaSenal || null,
-      codigo_producto: test.codigoProducto || null,
-      numero_caja: test.caja || null,
-      numero_lote: test.lote || null,
-      resultado: test.autoPendiente ? 'PENDIENTE' : test.estado,
-      auto_pendiente: test.autoPendiente === true,
-      cabezales_afectados: test.cabezalesFalla || 0,
-      tipos: test.tipos || [],
-      cantidades_por_tipo: test.cantidadesTipos || {},
-      observaciones: test.observaciones || null,
-    };
-    const { data, error } = await supabase.rpc('registrar_prueba_estanqueidad_spc', { p: payload });
+    let data, error, payload;
+    try {
+      ({ data, error, payload } = await registrarPruebaEstanqueidad(supabase, test));
+    } catch (e) {
+      // Errores de validación o red no deben consumir el inicio manual local.
+      this._ultimoError = e?.message || 'Fallo la conexión antes de confirmar el registro.';
+      return null;
+    }
     if (error || !data?.prueba_id) {
       console.error('createTest RPC estanqueidad:', error);
       this._ultimoError = error?.message || 'No se confirmó el registro de la prueba.';
