@@ -16,7 +16,7 @@ import {
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
-import { registrarPruebaEstanqueidad, construirPayloadPruebaEstanqueidad } from './api/estanqueidad.js';
+import { guardarPruebaSegura } from './api/registroSeguro.js';
 import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
@@ -790,49 +790,9 @@ const dataService = {
     // primero en staging. Ninguna escritura debe dejar fallas parciales.
     let data, error, payload;
     try {
-      const resultado = await conBloqueoDePrueba(
-        navigator.locks, test.legajoOperario, test.maquina, test.requestId,
-        async () => {
-          // Congelar el contenido ANTES de consultar/enviar. Un segundo envío
-          // con el mismo UUID pero distinto resultado queda bloqueado localmente.
-          const almacenIntentos = crearAlmacenIntentos(localStorage, test.legajoOperario);
-          const payloadActual = construirPayloadPruebaEstanqueidad(test);
-          const intento = almacenIntentos.preparar(test.maquina, test.requestId, payloadActual);
-          if (intento.yaExistia) {
-            // Un ACK pudo perderse antes de que la pestaña terminara la limpieza.
-            const anterior = await consultarConfirmacionPrueba(supabase, test.requestId);
-            if (anterior.estado === 'CONFIRMADA') {
-              return { data: { prueba_id: anterior.pruebaId,
-                numero_secuencial: anterior.numeroSecuencial, duplicado: true },
-                error: null, payload: intento.payload };
-            }
-          }
-          // registrarPruebaEstanqueidad serializa de nuevo el MISMO test.
-          // No hay fallback inseguro de INSERT directo.
-          let envio;
-          try {
-            envio = await registrarPruebaEstanqueidad(supabase, test);
-          } catch (e) {
-            // Una excepción de red tampoco demuestra que el INSERT falló.
-            // Es obligatorio reconciliar antes de informar el resultado.
-            envio = { data: null, error: { message: e?.message || 'Se perdió la respuesta de la red.' }, payload: intento.payload };
-          }
-          if (!envio.error && envio.data?.prueba_id) return envio;
-          // Si el servidor guardó pero se perdió el ACK, verificar por UUID.
-          const consulta = await consultarConfirmacionPrueba(supabase, test.requestId);
-          if (consulta.estado === 'CONFIRMADA') {
-            return { ...envio, error: null, data: {
-              prueba_id: consulta.pruebaId, numero_secuencial: consulta.numeroSecuencial,
-              duplicado: true,
-            } };
-          }
-          return { ...envio, error: envio.error || { message:
-            consulta.estado === 'INCIERTO'
-              ? 'Resultado incierto: conservá la señal y verificá antes de reenviar.'
-              : 'No se confirmó el registro de la prueba.' } };
-        },
-      );
-      ({ data, error, payload } = resultado);
+      ({ data, error, payload } = await guardarPruebaSegura({
+        supabase, test, storage: localStorage, lockManager: navigator.locks,
+      }));
     } catch (e) {
       this._ultimoError = e?.message || 'No se pudo confirmar el registro.';
       return null;
