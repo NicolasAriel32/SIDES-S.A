@@ -17,6 +17,7 @@ import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
 import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
+import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 
 
 /* =================================================================
@@ -1993,16 +1994,20 @@ const VistaOperario = ({ t, user, refresh }) => {
   // v7: persistencia local de la señal del PLC — la regla de los 60 minutos
   // sigue corriendo aunque el operario recargue la página o cierre el navegador.
   const LIMITE_PENDIENTE_SEG = 3600; // 60 min
-  const claveSenal   = (maquinaId) => `senal_plc_${user.legajo}_${maquinaId}`;
-  const persistirSenal = (maquinaId, senal) => { try { localStorage.setItem(claveSenal(maquinaId), JSON.stringify(senal)); } catch {} };
-  const limpiarSenal   = (maquinaId) => { try { localStorage.removeItem(claveSenal(maquinaId)); } catch {} };
-  const leerSenal      = (maquinaId) => { try { return JSON.parse(localStorage.getItem(claveSenal(maquinaId)) || 'null'); } catch { return null; } };
+  const almacenSenales = crearAlmacenSenales(localStorage, user.legajo);
+  const limpiarSenal = (maquinaId, requestId) => almacenSenales.eliminarSiCoincide(maquinaId, requestId);
   const recuperarSenalConId = (maquinaId) => {
-    const guardada = leerSenal(maquinaId);
+    const { senal: guardada, error } = almacenSenales.leer(maquinaId);
+    if (error) { setErrorPendiente(error); return null; }
     if (!guardada || guardada.requestId) return guardada;
-    // Recuperar una señal local previa sin reescribir ninguna prueba histórica.
+    // No inventar un UUID para una señal ajena o con timestamp malformado.
+    if (evaluarSenalManual(guardada, maquinaId).estado === 'INVALIDA') {
+      setErrorPendiente('La señal local requiere revisión manual; no se eliminó.');
+      return null;
+    }
     const migrada = { ...guardada, requestId: crypto.randomUUID() };
-    persistirSenal(maquinaId, migrada);
+    const actualizado = almacenSenales.actualizarSiCoincide(maquinaId, migrada, null);
+    if (!actualizado.ok) { setErrorPendiente(actualizado.error); return null; }
     return migrada;
   };
 
@@ -2034,7 +2039,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       } catch (auditError) {
         console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
-      limpiarSenal(maquinaId);
+      limpiarSenal(maquinaId, senal.requestId);
       return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
@@ -2126,8 +2131,9 @@ const VistaOperario = ({ t, user, refresh }) => {
       fechaSenal: ahora.toISOString(),
       fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
     };
-    setPruebaPendiente(senal);
-    persistirSenal(maquinaInfo.id, senal);   // v7: sobrevive recargas / cierre del navegador
+    const guardado = almacenSenales.guardar(maquinaInfo.id, senal);
+    if (!guardado.ok) { setErrorPendiente(guardado.error); return; }
+    setPruebaPendiente(senal); // Persistencia confirmada antes de habilitar carga
     await dataService.logEvent({
       accion: 'SIGNAL',
       usuario: `${user.nombre} ${user.apellido}`,
@@ -2186,7 +2192,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       return;
     }
     // Sólo limpiar la señal cuando la RPC confirmó el registro.
-    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);
+    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
     setPruebaPendiente(null);
     setAutoGuardado(false);
     setErrorPendiente('');
@@ -2286,7 +2292,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
-    if (submitting) return;
+    if (submitting || !pruebaPendiente?.requestId) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
@@ -2318,7 +2324,7 @@ const VistaOperario = ({ t, user, refresh }) => {
         return;
       }
       // La RPC y los triggers guardan la evidencia; createTest hace log complementario.
-      if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: prueba cargada → señal consumida
+      if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);  // ACK sólo para el UUID confirmado
 
       setShowSuccess(true);
       setTimeout(async () => {
