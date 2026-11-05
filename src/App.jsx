@@ -2221,26 +2221,62 @@ const VistaOperario = ({ t, user, refresh }) => {
   // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
     if (!maquinaInfo?.id) return;
-    const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
-    const ahora = new Date();
-    // FIX v6: fecha del ID usa zona AR para que coincida con el día calendario local
-    const senal = {
-      id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
-      maquina: maquinaInfo.id,
-      numeroSecuencial: numeroPrueba,
-      requestId: crypto.randomUUID(),
-      fechaSenal: ahora.toISOString(),
-      fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
-    };
-    const guardado = almacenSenales.guardar(maquinaInfo.id, senal);
-    if (!guardado.ok) { setErrorPendiente(guardado.error); return; }
-    borradorHidratado.current = senal.requestId;
-    setPruebaPendiente(senal); // Persistencia confirmada antes de habilitar carga
-    await dataService.logEvent({
-      accion: 'SIGNAL',
-      usuario: `${user.nombre} ${user.apellido}`,
-      desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
-    });
+    const maquinaId = maquinaInfo.id;
+    try {
+      // Una sola pestaña puede crear la próxima señal de este operario/máquina.
+      await conBloqueoDePrueba(navigator.locks, user.legajo, maquinaId, 'inicio-manual', async () => {
+        // Una respuesta perdida y una señal borrada accidentalmente NO deben
+        // crear un nuevo inicio silencioso mientras haya un envío anterior.
+        const anterior = almacenIntentos.leer(maquinaId);
+        if (anterior) {
+          if (anterior.version !== 1 || !anterior.requestId) {
+            setErrorBorrador('Existe un intento de envío ilegible. No se inicia otra prueba.');
+            return;
+          }
+          const confirmacion = await consultarConfirmacionPrueba(supabase, anterior.requestId);
+          if (confirmacion.estado !== 'CONFIRMADA') {
+            setErrorBorrador('Existe un envío anterior sin confirmación suficiente. Revisá el registro antes de iniciar otro.');
+            return;
+          }
+          if (!almacenIntentos.borrarConfirmado(maquinaId, anterior.requestId)) {
+            setErrorBorrador('No se pudo liberar el intento confirmado; revisá el almacenamiento.');
+            return;
+          }
+        }
+        // Nunca pisar un borrador huérfano, aunque no exista su señal inicial.
+        if (almacenBorradores.leer(maquinaId, '__sin_senal__').error) {
+          setErrorBorrador('Hay un borrador local sin señal asociada. Requiere revisión antes de continuar.');
+          return;
+        }
+        const numeroPrueba = await recalcularContador(maquinaId, true);
+        const ahora = new Date();
+        const senal = {
+          id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
+          maquina: maquinaId,
+          numeroSecuencial: numeroPrueba,
+          requestId: crypto.randomUUID(),
+          fechaSenal: ahora.toISOString(),
+          fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', {
+            hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires',
+          }),
+        };
+        const guardado = almacenSenales.guardar(maquinaId, senal);
+        if (!guardado.ok) { setErrorBorrador(guardado.error); return; }
+        setErrorBorrador('');
+        borradorHidratado.current = senal.requestId;
+        setPruebaPendiente(senal); // Sólo después de confirmar persistencia local.
+        try {
+          await dataService.logEvent({
+            accion: 'SIGNAL', usuario: `${user.nombre} ${user.apellido}`,
+            desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaId} · prueba #${numeroPrueba}`,
+          });
+        } catch (auditError) {
+          console.warn('Se conservó la señal, pero falló el log complementario:', auditError);
+        }
+      });
+    } catch (e) {
+      setErrorBorrador(e?.message || 'No se pudo reservar el inicio en este navegador.');
+    }
   };
 
   // Timer en vivo
@@ -2646,7 +2682,7 @@ const VistaOperario = ({ t, user, refresh }) => {
                         ⚠ COMPLETÁ EL REGISTRO AHORA
                       </div>
                       <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, marginTop: 2 }}>
-                        En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} se bloqueará automáticamente y no podrás modificarlo
+                        En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} vence el plazo. Si cargaste datos, se conservarán para revisión.
                       </div>
                     </div>
                   </div>
