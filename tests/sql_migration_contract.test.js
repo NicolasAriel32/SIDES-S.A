@@ -29,3 +29,16 @@ test('RPC contiene transacción, idempotencia y registro de detalle', () => {
   assert.match(sql, /spc_origen_evento/i);
   assert.doesNotMatch(sql, /INSERT INTO public\.no_conformidades/i);
 });
+
+test('RPC pública es invoker y función privilegiada no está expuesta por Data API', () => {
+  assert.match(sql, /CREATE SCHEMA IF NOT EXISTS spc_private/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION spc_private\\.registrar_prueba_estanqueidad_internal\(p jsonb\)/);
+  assert.match(sql, /SECURITY DEFINER/i);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\\.registrar_prueba_estanqueidad_spc\(p jsonb\)/);
+  assert.match(sql, /SELECT spc_private\\.registrar_prueba_estanqueidad_internal\(p\)/);
+  assert.match(sql, /REVOKE INSERT ON TABLE public\\.pruebas, public\\.pruebas_fallas FROM authenticated/i);
+  assert.match(sql, /auth\\.uid\(\)/);
+  assert.match(sql, /u\\.activo = true/);
+  assert.match(sql, /v_actor_maquina IS DISTINCT FROM v_maquina/);
+  assert.match(sql, /extensions\\.digest\(p::text,'sha256'\)/);
+});
