@@ -19,6 +19,7 @@ import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/e
 import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
+import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
 
 
 /* =================================================================
@@ -787,10 +788,28 @@ const dataService = {
     // primero en staging. Ninguna escritura debe dejar fallas parciales.
     let data, error, payload;
     try {
-      ({ data, error, payload } = await registrarPruebaEstanqueidad(supabase, test));
+      const resultado = await conBloqueoDePrueba(
+        navigator.locks, test.legajoOperario, test.maquina, test.requestId,
+        async () => {
+          const envio = await registrarPruebaEstanqueidad(supabase, test);
+          if (!envio.error && envio.data?.prueba_id) return envio;
+          // Si el servidor guardó pero se perdió el ACK, verificar por UUID.
+          const consulta = await consultarConfirmacionPrueba(supabase, test.requestId);
+          if (consulta.estado === 'CONFIRMADA') {
+            return { ...envio, error: null, data: {
+              prueba_id: consulta.pruebaId, numero_secuencial: consulta.numeroSecuencial,
+              duplicado: true,
+            } };
+          }
+          return { ...envio, error: envio.error || { message:
+            consulta.estado === 'INCIERTO'
+              ? 'Resultado incierto: conservá la señal y verificá antes de reenviar.'
+              : 'No se confirmó el registro de la prueba.' } };
+        },
+      );
+      ({ data, error, payload } = resultado);
     } catch (e) {
-      // Errores de validación o red no deben consumir el inicio manual local.
-      this._ultimoError = e?.message || 'Fallo la conexión antes de confirmar el registro.';
+      this._ultimoError = e?.message || 'No se pudo confirmar el registro.';
       return null;
     }
     if (error || !data?.prueba_id) {
