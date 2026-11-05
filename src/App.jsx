@@ -16,7 +16,8 @@ import {
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
-import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
+import { registrarPruebaEstanqueidad, construirPayloadPruebaEstanqueidad } from './api/estanqueidad.js';
+import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
@@ -792,6 +793,22 @@ const dataService = {
       const resultado = await conBloqueoDePrueba(
         navigator.locks, test.legajoOperario, test.maquina, test.requestId,
         async () => {
+          // Congelar el contenido ANTES de consultar/enviar. Un segundo envío
+          // con el mismo UUID pero distinto resultado queda bloqueado localmente.
+          const almacenIntentos = crearAlmacenIntentos(localStorage, test.legajoOperario);
+          const payloadActual = construirPayloadPruebaEstanqueidad(test);
+          const intento = almacenIntentos.preparar(test.maquina, test.requestId, payloadActual);
+          if (intento.yaExistia) {
+            // Un ACK pudo perderse antes de que la pestaña terminara la limpieza.
+            const anterior = await consultarConfirmacionPrueba(supabase, test.requestId);
+            if (anterior.estado === 'CONFIRMADA') {
+              return { data: { prueba_id: anterior.pruebaId,
+                numero_secuencial: anterior.numeroSecuencial, duplicado: true },
+                error: null, payload: intento.payload };
+            }
+          }
+          // registrarPruebaEstanqueidad serializa de nuevo el MISMO test.
+          // No hay fallback inseguro de INSERT directo.
           const envio = await registrarPruebaEstanqueidad(supabase, test);
           if (!envio.error && envio.data?.prueba_id) return envio;
           // Si el servidor guardó pero se perdió el ACK, verificar por UUID.
@@ -2033,6 +2050,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const LIMITE_PENDIENTE_SEG = 3600; // 60 min
   const almacenSenales = crearAlmacenSenales(localStorage, user.legajo);
   const almacenBorradores = crearAlmacenBorradores(localStorage, user.legajo);
+  const almacenIntentos = crearAlmacenIntentos(localStorage, user.legajo);
   const restaurarBorrador = (senal, maquinaId) => {
     const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
     if (error) { setErrorBorrador(error); borradorHidratado.current = null; return; }
@@ -2108,6 +2126,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       }
       limpiarSenal(maquinaId, senal.requestId);
       almacenBorradores.borrarConfirmado(maquinaId, senal.requestId);
+      almacenIntentos.borrarConfirmado(maquinaId, senal.requestId);
       return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
@@ -2283,6 +2302,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (maquinaInfo?.id) {
       limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
       almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+      almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
     }
     borradorHidratado.current = null;
     setPruebaPendiente(null);
@@ -2419,6 +2439,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       if (maquinaInfo?.id) {
         limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
         almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+        almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
       }
       borradorHidratado.current = null; // ACK sólo para el UUID confirmado
 
