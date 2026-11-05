@@ -2493,7 +2493,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             Registro de estanqueidad — modo manual
           </h2>
           <p style={{ fontFamily: 'Manrope', color: t.textMuted, marginTop: 8, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto' }}>
-            El aviso real aparece en la HMI Kinco de la máquina <span style={{ fontFamily: 'JetBrains Mono', color: t.text }}>{maquinaInfo?.id || '—'}</span>.
+            En MAQ-010 el aviso real se muestra en la HMI Kinco; para otras máquinas seguí el procedimiento industrial vigente.
             Este botón inicia un registro manual: no recibe datos del PLC ni verifica la hora del aviso.
           </p>
           <button onClick={generarSenalPLC} disabled={!maquinaInfo?.id} style={{
@@ -2509,7 +2509,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             Iniciar registro manual (simulado)
           </button>
           <div style={{ marginTop: 12, fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em' }}>
-            MODO PILOTO · SIN CONEXIÓN KINCO/DELTA · HORA DE INICIO LOCAL NO VERIFICADA
+            MODO PILOTO · SIN CAPTURA OT VERIFICADA · HORA DE INICIO LOCAL
           </div>
         </Card>
       ) : pruebaPendiente && (
