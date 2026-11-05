@@ -5,7 +5,8 @@ on:
     paths:
       - 'src/App.jsx'
       - 'src/domain/estanqueidad.js'
-      - 'tests/estanqueidad.test.js'
+      - 'tests/**/*.test.js'
+      - 'sql/spc_001_registrar_prueba_atomica_BORRADOR_NO_APLICAR.sql'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/spc-001-ci.yml'
