@@ -25,12 +25,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_pruebas_spc_request
   ON public.pruebas (spc_request_id);
 -- PostgreSQL permite múltiples NULL en este índice: no afecta las filas históricas.
 
--- SECURITY INVOKER conserva RLS y permisos del usuario autenticado.
--- No hay elevación de privilegios ni escritura industrial.
-CREATE OR REPLACE FUNCTION public.registrar_prueba_estanqueidad_spc(p jsonb)
+-- Evita el acceso INSERT directo de clientes: todas las pruebas nuevas
+-- ingresan por una funcion interna con privilegios acotados y validacion
+-- explicita de auth.uid, rol, maquina y contenido.
+-- La funcion con SECURITY DEFINER vive en un esquema NO expuesto por PostgREST;
+-- el wrapper publico conserva SECURITY INVOKER.
+CREATE SCHEMA IF NOT EXISTS spc_private;
+REVOKE ALL ON SCHEMA spc_private FROM PUBLIC, anon;
+GRANT USAGE ON SCHEMA spc_private TO authenticated;
+
+CREATE OR REPLACE FUNCTION spc_private.registrar_prueba_estanqueidad_internal(p jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $function$
 DECLARE
@@ -81,7 +88,7 @@ BEGIN
   IF v_request_id IS NULL THEN
     RAISE EXCEPTION 'Identificador de solicitud obligatorio';
   END IF;
-  v_hash := md5(p::text);
+  v_hash := encode(extensions.digest(p::text,'sha256'),'hex');
   v_maquina := NULLIF(btrim(p->>'id_maquina'),'');
   v_producto := NULLIF(btrim(p->>'codigo_producto'),'');
   v_caja := NULLIF(btrim(p->>'numero_caja'),'');
@@ -224,8 +231,26 @@ BEGIN
 END
 $function$;
 
-REVOKE ALL ON FUNCTION public.registrar_prueba_estanqueidad_spc(jsonb) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.registrar_prueba_estanqueidad_spc(jsonb) FROM anon;
+-- No se puede llamar a la funcion interna como un RPC publico:
+-- spc_private no forma parte de los schemas expuestos.
+REVOKE ALL ON FUNCTION spc_private.registrar_prueba_estanqueidad_internal(jsonb) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION spc_private.registrar_prueba_estanqueidad_internal(jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.registrar_prueba_estanqueidad_spc(p jsonb)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path = pg_catalog, public, spc_private
+AS $wrapper$
+  SELECT spc_private.registrar_prueba_estanqueidad_internal(p)
+$wrapper$;
+
+REVOKE ALL ON FUNCTION public.registrar_prueba_estanqueidad_spc(jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.registrar_prueba_estanqueidad_spc(jsonb) TO authenticated;
+
+-- Operarios/supervisores ya no pueden saltarse validacion y transaccion
+-- mediante INSERT directo a tablas de pruebas. No revoca SELECT/UPDATE;
+-- por seguridad, antes de desplegar hay que certificar otros clientes.
+REVOKE INSERT ON TABLE public.pruebas, public.pruebas_fallas FROM authenticated;
 
 COMMIT;
