@@ -2043,6 +2043,11 @@ const VistaOperario = ({ t, user, refresh }) => {
   // que ya superó los 60 minutos.
   const registrarPendienteAuto = async (senal, maquinaId) => {
     try {
+      const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
+      if (error || borradorTieneCarga(borrador)) {
+        setErrorBorrador(error || 'Existe un formulario iniciado. Revisalo antes de cerrar la señal.');
+        return false;
+      }
       const test = {
         ...senal,
         operario: `${user.nombre} ${user.apellido}`,
@@ -2106,10 +2111,12 @@ const VistaOperario = ({ t, user, refresh }) => {
         if (evaluacion.estado === 'VENCIDA') {
           const registrado = await registrarPendienteAuto(guardada, m.id);
           if (registrado) {
+            borradorHidratado.current = null;
             setPruebaPendiente(null);
             if (m?.id) await recalcularContador(m.id);
             refresh();
           } else {
+            restaurarBorrador(guardada, m.id);
             setPruebaPendiente(guardada);
             setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
             setAutoGuardado(true);
@@ -2148,6 +2155,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       }
       if (evaluacion.estado === 'VENCIDA') {
         if (!await registrarPendienteAuto(guardada, m.id)) {
+          restaurarBorrador(guardada, m.id);
           setPruebaPendiente(guardada);
           setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
           setAutoGuardado(true);
@@ -2196,6 +2204,11 @@ const VistaOperario = ({ t, user, refresh }) => {
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
     if (!pruebaPendiente || autoGuardado) return;
+    const { borrador, error } = almacenBorradores.leer(pruebaPendiente.maquina, pruebaPendiente.requestId);
+    if (error || borradorTieneCarga(borrador)) {
+      setErrorBorrador(error || 'Hay datos cargados. No se registró un PENDIENTE automático.');
+      return;
+    }
     setAutoGuardado(true);
     setErrorPendiente('');
     try {
@@ -2400,6 +2413,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
+      {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
       {/* CAMBIO v4: Toast de nueva observación */}
       {toastObs && (
         <ToastObservacion
