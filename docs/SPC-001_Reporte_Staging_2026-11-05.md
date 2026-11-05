@@ -52,3 +52,28 @@ Antes de aprobar merge, se exige:
 6. Aprobar explícitamente cualquier migración que afecte a la base real.
 
 Este archivo registra **resultados obtenidos**, no certificación SPC ni validación de captura de la HMI Kinco/PLC Delta.
+
+
+## Adenda de verificación: funciones reales, concurrencia y cierre del acceso directo
+
+Se continuó con pruebas ejecutadas en el proyecto STAGING independiente:
+
+- Se recuperaron **sólo las definiciones** de las funciones `_audit_append`, `_audit_append_v2`, `fn_audit_trail`, `fn_audit_log_immutable` y `fn_pruebas_set_calibracion` de SIDES. Se instalaron sobre **tablas sintéticas** en STAGING, sin copiar auditoría ni registros de producción.
+- Una prueba `RECHAZADO` con tipos EST y CLV insertó **1 prueba, 2 fallas y 3 eventos de auditoría**, secuencias 1/2/3, hashes de 64 caracteres y enlaces de cadena correctos. Sin calibración se registró `SIN_CALIBRACION`.
+- **Concurrencia real en STAGING:** dos llamadas simultáneas con mismo UUID y payload, ambas confirmadas, produjeron **1 sola prueba, 2 fallas y 3 eventos auditados**. El registro resultante queda en staging como evidencia sintética; nunca se escribió en SIDES real.
+- **Defecto de seguridad descubierto:** las políticas/grants de inserción anteriores permitían omitir la RPC e insertar un rechazo con cero cabezales afectados. Se reprodujo en una transacción revertida.
+- **Corrección verificada en staging:** función privilegiada en `spc_private` (esquema no expuesto) que controla el actor con `auth.uid()`, wrapper RPC público `SECURITY INVOKER` y `REVOKE INSERT` a clientes autenticados sobre `pruebas` y `pruebas_fallas`. Prueba: el INSERT directo se rechaza por permisos, la RPC autorizada guarda prueba y detalles y genera auditoría.
+- Se forzó un error en `pruebas_fallas` con una restricción temporal `NOT VALID`: la **prueba principal, su detalle y la auditoría** se revirtieron juntos, sin residuos. El `ROLLBACK` también retiró la restricción artificial.
+- El resumen del contenido se compara con huella SHA-256 para solicitudes duplicadas en la función interna. Los tamaños y colores válidos del producto ahora se validan también server-side; un código de producto sintético válido fue admitido y los tamaños/colores fuera de catálogo fueron rechazados.
+- El frontend fue ajustado para no enviar borradores de producto/caja/lote al guardar un pendiente automático. La función de serialización del payload RPC fue extraída a `src/api/estanqueidad.js` con pruebas unitarias de contrato, reintento, datos inválidos y error de red.
+- Se inspeccionaron las referencias a `pruebas` y `pruebas_fallas` de los componentes React y módulos de Calidad del repositorio. Las inserciones directas previas estaban en `createTest`, ya sustituido por RPC; los otros accesos localizados son lecturas y actualización.
+- Se comprobó el listado de proyectos Pages accesible en la cuenta Cloudflare conectada; **no aparece un proyecto Pages de SIDES**. Esto no descarta despliegues por otras cuentas o plataformas.
+- Todas las comprobaciones de backend se realizaron mediante SQL con rol `authenticated` y `request.jwt.claim.sub` de identidad sintética. **No equivale a un inicio de sesión real por GoTrue/Auth HTTP**.
+
+### Alcance de aprobación
+
+- **Aprobado en STAGING:** integridad transaccional, simultaneidad/idempotencia básica, validación centralizada, control de autorización sobre la máquina, bloqueo de INSERT directo y emisión de auditoría encadenada.
+- **Pendiente antes de desplegar/fusionar:** E2E con sesión Auth HTTP real y móvil, inventario de consumidores externos que podrían necesitar INSERT directo, plan de despliegue coordinado DB+frontend, restore de backup verificable y comprobación del hosting real. El entorno STAGING utiliza el subconjunto de tablas necesario más las funciones reales de auditoría/calibración; **no es una restauración completa de producción**.
+- **Excepción de seguridad existente:** `get_my_profile()` es `SECURITY DEFINER` invocable por usuarios autenticados. En staging se revocó a `anon`; sigue una advertencia documentada de Supabase Advisors para ese helper de perfil. No es parte de la función de guardado nueva.
+
+**No se aplicó la migración a la base de producción ni se fusionó el PR mientras queden bloqueos.**
