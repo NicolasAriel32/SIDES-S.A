@@ -809,7 +809,14 @@ const dataService = {
           }
           // registrarPruebaEstanqueidad serializa de nuevo el MISMO test.
           // No hay fallback inseguro de INSERT directo.
-          const envio = await registrarPruebaEstanqueidad(supabase, test);
+          let envio;
+          try {
+            envio = await registrarPruebaEstanqueidad(supabase, test);
+          } catch (e) {
+            // Una excepción de red tampoco demuestra que el INSERT falló.
+            // Es obligatorio reconciliar antes de informar el resultado.
+            envio = { data: null, error: { message: e?.message || 'Se perdió la respuesta de la red.' }, payload: intento.payload };
+          }
           if (!envio.error && envio.data?.prueba_id) return envio;
           // Si el servidor guardó pero se perdió el ACK, verificar por UUID.
           const consulta = await consultarConfirmacionPrueba(supabase, test.requestId);
