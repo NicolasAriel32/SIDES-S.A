@@ -2158,7 +2158,9 @@ const VistaOperario = ({ t, user, refresh }) => {
         operario: `${user.nombre} ${user.apellido}`,
         legajoOperario: user.legajo,
         estado: 'PENDIENTE',
-        caja: caja || null, lote: lote || null, codigoProducto: codigoProducto || null,
+        caja: null, lote: null, codigoProducto: null,
+        // Se trata de una señal manual vencida, no de un ensayo físico terminado.
+        // No enviamos borradores incompletos que podrían violar formato de producto.
         observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
         tipos: [], cantidadesTipos: {}, cabezalesFalla: 0,
         esperandoAprobacion: false, timestamp: new Date().toISOString(), autoPendiente: true,
