@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verificarSesionLocal, inventariarEvidenciaLocal, limpiarPerfilLocal } from '../src/domain/seguridadPuesto.js';
+import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal } from '../src/domain/seguridadPuesto.js';
 
 function memoria() {
  const m=new Map();
@@ -41,4 +41,26 @@ test('inventario no confunde legajos con prefijo común',()=>{
 test('si storage no está disponible se declara incierto y no se afirma ausencia de evidencia',()=>{
  const s={get length(){throw Error('storage bloqueado')}};
  assert.equal(inventariarEvidenciaLocal(s,'OP1').estado,'INCIERTO');
+});
+
+test('un supervisor autenticado no puede asumir el perfil de otro legajo',()=>{
+ const authUser={id:'uid-supervisor'}, perfil={id:'uid-operario',legajo:'OP2',activo:true,rol:'operario'};
+ assert.equal(verificarPerfilAutenticado({perfil,authUser,legajoSolicitado:'OP2'}).motivo,'PERFIL_NO_COINCIDE_CON_AUTH');
+});
+test('el legajo debe corresponder al mismo UID sin admitir perfiles cruzados',()=>{
+ const perfil={id:'uid-1',legajo:'OP1',activo:true,rol:'operario'};
+ assert.equal(verificarPerfilAutenticado({perfil,authUser:{id:'uid-1'},legajoSolicitado:'OP2'}).motivo,'LEGAJO_NO_COINCIDE');
+ assert.equal(verificarPerfilAutenticado({perfil,authUser:{id:'uid-1'},legajoSolicitado:'OP1'}).ok,true);
+});
+test('perfil inactivo, estado nulo y rol desconocido niegan acceso',()=>{
+ const base={id:'uid-1',legajo:'OP1',activo:true,rol:'operario'},authUser={id:'uid-1'};
+ for(const activo of [null,false,undefined]) {
+  assert.equal(verificarPerfilAutenticado({perfil:{...base,activo},authUser}).motivo,'PERFIL_INACTIVO');
+ }
+ assert.equal(verificarPerfilAutenticado({perfil:{...base,rol:'administrador-super'},authUser}).motivo,'ROL_INVALIDO');
+});
+test('perfiles vacíos o no objetos no autorizan recuperar sesión',()=>{
+ for(const perfil of [null,undefined,[],{},'OP1']) {
+  assert.equal(verificarPerfilAutenticado({perfil,authUser:{id:'uid-1'}}).ok,false);
+ }
 });
