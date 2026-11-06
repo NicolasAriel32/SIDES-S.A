@@ -16,7 +16,7 @@ import {
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
-import { guardarPruebaSegura } from './api/registroSeguro.js';
+import { guardarPruebaSegura, reintentarIntentoGuardado } from './api/registroSeguro.js';
 import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
@@ -2491,6 +2491,40 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
   };
 
+  // Recupera el payload original de un envío anterior sin reconstruirlo
+  // desde campos que pudieron cambiar, ni inventar un nuevo identificador.
+  const reintentarEnvioPrevio = async () => {
+    if (submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
+        !maquinaInfo?.id || !estadoRecuperacion.requestId ||
+        (pruebaPendiente && !editorActivo)) return;
+    setSubmitting(true);
+    try {
+      const { data, error } = await reintentarIntentoGuardado({
+        supabase, storage: localStorage, lockManager: navigator.locks,
+        legajo: user.legajo, maquina: maquinaInfo.id,
+        requestId: estadoRecuperacion.requestId,
+      });
+      if (error || !data?.prueba_id) {
+        setErrorBorrador(error?.message || 'No se confirmó el intento anterior. Los datos no se borraron.');
+        return;
+      }
+      const limpieza = limpiarConfirmado(maquinaInfo.id, estadoRecuperacion.requestId, data.prueba_id);
+      if (limpieza.estado === 'CONFIRMADA_LIMPIA') setErrorBorrador('');
+      borradorHidratado.current = null;
+      setPruebaPendiente(null);
+      setAutoGuardado(false);
+      setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({});
+      setCabezalesFalla(0);
+      setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
+      await recalcularContador(maquinaInfo.id);
+      refresh();
+    } catch (e) {
+      setErrorBorrador(e?.message || 'No se pudo reintentar el envío guardado.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const tieneCriticaSeleccionada = tiposSeleccionados.some(id => TIPOS_FALLA.find(tf => tf.id === id)?.gravedad === 'CRITICA');
   const validacionMuestra = validarResultadoEstanqueidad({
     estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
@@ -2514,6 +2548,16 @@ const VistaOperario = ({ t, user, refresh }) => {
             style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
             Consultar servidor y revisar registro local
           </button>
+          {estadoRecuperacion.estado === 'ENVIO_PREVIO' && (
+            <button type="button"
+              disabled={submitting || (Boolean(pruebaPendiente) && !editorActivo)}
+              onClick={reintentarEnvioPrevio}
+              style={{ padding: '8px 12px', marginLeft: 8, borderRadius: 6,
+                border: `1px solid ${t.border}`, background: t.surfaceHi,
+                color: t.text, cursor: 'pointer' }}>
+              Reintentar exactamente el envío anterior
+            </button>
+          )}
         </div>
       )}
       {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
