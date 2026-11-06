@@ -28,6 +28,7 @@ export function evaluarConcordanciaContramuestra(prueba, hallazgo) {
   if (!texto(prueba.caja) || !texto(prueba.lote)) add('REFERENCIAS_DIGITALES_INCOMPLETAS');
   if (!['OK', 'RECHAZADO'].includes(prueba.resultado) ||
       prueba.anulada !== false ||
+      !texto(prueba.estadoFinal) ||
       ['ANULADA', 'ANULADO', 'PENDIENTE', 'CANCELADA'].includes(prueba.estadoFinal)) {
     add('PRUEBA_NO_EVALUABLE');
   }
