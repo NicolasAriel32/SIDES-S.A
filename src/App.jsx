@@ -6085,6 +6085,12 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
+    const evidencia = inventariarEvidenciaLocal(localStorage, user.legajo);
+    if (evidencia.estado === 'INCIERTO') {
+      if (!window.confirm('No se pudo comprobar si quedan registros de pruebas en este puesto. Cerrar sesión NO borra esos datos. ¿Cerrar sesión igualmente?')) return;
+    } else if (evidencia.total > 0) {
+      if (!window.confirm(`Hay ${evidencia.total} registros locales de estanqueidad asociados a tu legajo en este navegador. Se conservarán para recuperarlos en el próximo ingreso. ¿Cerrar sesión?`)) return;
+    }
     // Un log de auditoría complementario no puede impedir el cierre local.
     try {
       await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
