@@ -66,3 +66,25 @@ export function limpiarPerfilLocal(storage, claveUsuario) {
   try { storage.removeItem(claveUsuario); return true; }
   catch { return false; }
 }
+
+// La evidencia en localStorage NO está cifrada. Impedir el uso rutinario de
+// un mismo perfil de navegador por dos legajos reduce exposición accidental,
+// sin afirmar privacidad frente a DevTools o acceso al perfil Windows.
+export function comprobarPerfilCompartido(storage, legajo) {
+  if (!storage || typeof legajo !== 'string' || !legajo.trim()) {
+    return { ok: false, motivo: 'IDENTIDAD_INVALIDA' };
+  }
+  const prefijos = ['senal_plc_', 'spc_borrador_v1_', 'spc_intento_v1_'];
+  try {
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (typeof key !== 'string') continue;
+      if (prefijos.some(p => key.startsWith(p) && !key.startsWith(p + legajo + '_'))) {
+        return { ok: false, motivo: 'EVIDENCIA_DE_OTRO_LEGAJO' };
+      }
+    }
+    return { ok: true, motivo: null };
+  } catch {
+    return { ok: false, motivo: 'STORAGE_INACCESIBLE' };
+  }
+}
