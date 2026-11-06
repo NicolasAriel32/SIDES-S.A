@@ -6039,6 +6039,7 @@ export default function App() {
 
   const [user, setUser] = useState(null);
   const authRevision = useRef(0);
+  const cerrandoSesion = useRef(false);
   const [hora, setHora] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [operarioTab, setOperarioTab] = useState('produccion');
@@ -6049,6 +6050,7 @@ export default function App() {
     if (esModoPasillo) return undefined;
     let vigente = true;
     const revalidar = (inicial = false) => {
+      if (cerrandoSesion.current) return;
       if (!inicial) {
         // El foco no debe intentar restaurar perfiles que ya cerraron sesión.
         try {
@@ -6058,13 +6060,13 @@ export default function App() {
       const revisionInicial = authRevision.current;
       dataService.getCurrentUser()
         .then(u => {
-          if (!vigente || revisionInicial !== authRevision.current) return;
+          if (!vigente || cerrandoSesion.current || revisionInicial !== authRevision.current) return;
           // La restauración inicial no debe pisar un login más reciente.
           if (inicial) setUser(actual => actual || u);
           else setUser(u);
         })
         .catch(() => {
-          if (!vigente || revisionInicial !== authRevision.current) return;
+          if (!vigente || cerrandoSesion.current || revisionInicial !== authRevision.current) return;
           if (inicial) setUser(actual => actual || null);
           else setUser(null);
         });
@@ -6107,7 +6109,10 @@ export default function App() {
     } else if (evidencia.total > 0) {
       if (!window.confirm(`Hay ${evidencia.total} registros locales de estanqueidad asociados a tu legajo en este navegador. Se conservarán para recuperarlos en el próximo ingreso. ¿Cerrar sesión?`)) return;
     }
+    cerrandoSesion.current = true;
     authRevision.current++; // Invalida consultas de sesión que aún estén en vuelo.
+    // La pantalla desaparece ANTES de hacer una llamada de red que podría tardar.
+    setUser(null);
     // Un log de auditoría complementario no puede impedir el cierre local.
     try {
       await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
@@ -6129,11 +6134,11 @@ export default function App() {
   }
 
   if (!user) {
-    return <PantallaLogin onLogin={u => { authRevision.current++; setUser(u); }} t={t} />;
+    return <PantallaLogin onLogin={u => { cerrandoSesion.current = false; authRevision.current++; setUser(u); }} t={t} />;
   }
 
   if (user.forceChange) {
-    return <PantallaCambioPassword user={user} onChanged={u => { authRevision.current++; setUser(u); }} t={t} />;
+    return <PantallaCambioPassword user={user} onChanged={u => { cerrandoSesion.current = false; authRevision.current++; setUser(u); }} t={t} />;
   }
 
   const roleTabBtn = (active) => ({
