@@ -16,6 +16,29 @@ export function verificarSesionLocal({ storage, claveUsuario, authUser }) {
   } catch { return { ok: false, motivo: 'PERFIL_CORRUPTO' }; }
 }
 
+// Contrato servidor↔Auth. El legajo NO es suficiente para seleccionar un
+// perfil: supervisor/admin puede consultar otros legajos por RLS.
+export function verificarPerfilAutenticado({ perfil, authUser, legajoSolicitado = null }) {
+  if (!authUser?.id || typeof authUser.id !== 'string') {
+    return { ok: false, motivo: 'SIN_AUTH' };
+  }
+  if (!perfil || typeof perfil !== 'object' || Array.isArray(perfil) ||
+      typeof perfil.id !== 'string' || perfil.id !== authUser.id ||
+      typeof perfil.legajo !== 'string' || !perfil.legajo.trim()) {
+    return { ok: false, motivo: 'PERFIL_NO_COINCIDE_CON_AUTH' };
+  }
+  if (legajoSolicitado !== null && perfil.legajo !== legajoSolicitado) {
+    return { ok: false, motivo: 'LEGAJO_NO_COINCIDE' };
+  }
+  if (perfil.activo !== true) {
+    return { ok: false, motivo: 'PERFIL_INACTIVO' };
+  }
+  if (!['operario', 'supervisor', 'admin', 'inspector', 'auditor'].includes(perfil.rol)) {
+    return { ok: false, motivo: 'ROL_INVALIDO' };
+  }
+  return { ok: true, motivo: null, perfil };
+}
+
 // Solo se usa para informar sobre evidencia pendiente, nunca para eliminarla.
 export function inventariarEvidenciaLocal(storage, legajo) {
   const prefijos = ['senal_plc_', 'spc_borrador_v1_', 'spc_intento_v1_'];
