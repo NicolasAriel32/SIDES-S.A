@@ -38,11 +38,52 @@ BACKUP_RECOVERY_PLAN.md y RESTORE_TEST_TEMPLATE.md.
 - No se generan límites de control, DPU, EWMA, CUSUM, alertas, NC ni acciones en equipos.
 - No se alteran históricos ni se ejecuta SQL.
 
-Limitaciones importantes: el método getTests(desde) existente podría truncar por
-paginación y devuelve lista vacía en ciertos errores. Los conteos son solo de
-registros recuperados, no prueban cobertura ni ausencia de fallas.
-La marca VALIDADO no se establece en esta entrega. Antes de mostrar datos
-operativos como representativos, Calidad debe autorizar muestreo y procedencia.
+## Entrega 3: lectura paginada de MAQ-010 y estados comprobables
+
+- Se reemplazó en el panel SPC la dependencia de `getTests(desde)` por una
+  lectura específica de sólo lectura desde `src/api/spcDescriptivo.js`.
+- Filtros por máquina y ventana de 30 días, orden estable por `created_at`
+  e `id`, con páginas de hasta 100 registros y límite conservador de 2000.
+- `count: exact` para **filas visibles bajo RLS**. No acredita cobertura
+  industrial: puede haber registros fuera de la autorización o períodos sin
+  conexión. Cada página se compara con el conteo informado.
+- Tres estados: `COMPLETO`, `PARCIAL` y `ERROR`. Si cambia el conteo,
+  faltan páginas, hay duplicaciones o se alcanza el límite, se deshabilitan
+  porcentajes. Un error de consulta **no equivale a cero pruebas**.
+- Si la lectura falla, no se publican datos parciales como completos;
+  se usa un código genérico sin exponer tokens ni mensajes internos.
+- Consultas por páginas no son una transacción de snapshot PostgreSQL;
+  el filtro de tiempo y chequeo de IDs/count atenúan riesgos pero no prueban
+  invariabilidad simultánea de todos los registros.
+- `created_at` actualmente es `timestamp without time zone` en staging.
+  La lectura **no inventa UTC**: una marca sin zona explícita no es apta
+  para un indicador validado. Antes de habilitar SPC oficial hace falta una
+  convención temporal inequívoca del lado servidor.
+- `null` de cabezales afectados no se convierte en cero verdadero; ensayos
+  anulados se excluyen. Muestra con múltiples tipos conserva conteo único.
+- No altera `getTests` usado por paneles operativos ni la decisión de NC.
+- La marca `VALIDADO` no se establece en esta entrega. Debe depender de
+  protocolo físico aprobado y autorización server-side de Calidad.
+
+### Consulta y autorización: observaciones de 2026-11-06
+
+- Staging: tablas `pruebas` y `pruebas_fallas` con RLS habilitado (2
+  políticas en cada una). Producción: RLS habilitado (3 y 2 políticas,
+  respectivamente). **No se ejecutaron pruebas Auth HTTP por rol**.
+- Staging tiene la RPC y columnas SPC; producción **no**. No desplegar el
+  frontend hasta completar migración coordinada, backup y rollback.
+- La UI solo se muestra en la vista supervisor por el enrutamiento vigente,
+  pero **no se confía en la UI como autorización**. Verificar RLS en staging
+  con usuarios reales de ensayo y pruebas negativas antes de operar.
+- Los conteos son registros consultables, no una prueba de completitud OT.
+
+## Riesgos de producción aún pendientes
+
+- Restauración aislada y backup externo probado.
+- Autoridad para validar estadísticas, evidencia temporal y protocolo de muestra.
+- Reglas RLS/RPC probadas con usuarios de cada rol, no sólo metadatos.
+- Compatibility de frontend y migración en ventana controlada; no se han
+  aplicado SQL ni migraciones a producción.
 
 ## Próximas entregas
 
