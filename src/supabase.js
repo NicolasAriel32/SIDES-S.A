@@ -7,9 +7,14 @@
 // =================================================================
 
 import { createClient } from '@supabase/supabase-js'
+import { claveSesionAuthPorUrl } from './domain/seguridadPuesto.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+// Key explícita igual al valor predeterminado de la versión instalada de
+// supabase-js. Evita abandonar sesiones antiguas en el mismo sessionStorage.
+export const AUTH_STORAGE_KEY = claveSesionAuthPorUrl(supabaseUrl) || 'spc001-auth-session-v1'
 
 if (!supabaseUrl || !supabaseAnonKey) {
   // Mensaje claro en consola cuando faltan las variables
@@ -25,6 +30,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    storageKey: AUTH_STORAGE_KEY,
     // v7: la sesión de Auth vive en sessionStorage (por pestaña) en lugar de
     // localStorage (compartido). Antes, al abrir dos pestañas con usuarios
     // distintos (p.ej. operario + supervisor), la última pisaba la sesión de

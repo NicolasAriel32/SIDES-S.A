@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js'
+import { supabase, AUTH_STORAGE_KEY } from './supabase.js'
 import React, { useState, useMemo, useEffect, useRef, createContext, useContext } from 'react';
 import {
   Activity, AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight,
@@ -21,7 +21,9 @@ import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
-import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
+import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorExclusivo.js';
+import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
+import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 
 
@@ -326,80 +328,34 @@ const dataService = {
   // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
   // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
-    const email = `${legajo.trim()}@sides.internal`
-
-    // 1) Autenticar con Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
-    console.log('login - supabase auth:', { email, user: authData?.user ? 'ok' : 'null', authError })
-
-    if (authError || !authData?.user) {
-      console.log('login: auth fallido', authError?.message)
-      return null
-    }
-
-    // 2) Traer perfil completo desde la tabla usuarios (roles, máquina, etc.)
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('legajo', legajo.trim())
-      .maybeSingle()
-
-    console.log('login - perfil usuarios:', { data: data ? 'encontrado' : 'null', error })
-
-    if (error) { console.error('login perfil error:', error); return null }
-    if (!data) { console.log('login: perfil no encontrado en usuarios'); return null }
-    if (data.activo === false) { console.log('login: usuario inactivo'); return null }
-
-    const user = mapUserFromDb(data)
-    sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user))
-    console.log('login: éxito', { legajo: user.legajo, rol: user.rol })
-    return user
+    return iniciarSesionPuesto({
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
+      mapUser: mapUserFromDb, legajo, password,
+    });
   },
 
   async logout() {
-    await supabase.auth.signOut()
-    sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
-    console.log('logout: sesión cerrada')
+    return cerrarSesionPuesto({
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
+    });
   },
 
   async getCurrentUser() {
-    // Verificar que siga habiendo sesión activa en Supabase Auth
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) {
-      sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
-      return null
-    }
-    const stored = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)
-    return stored ? JSON.parse(stored) : null
+    return restaurarSesionPuesto({
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
+      mapUser: mapUserFromDb,
+    });
   },
 
   async changePassword(legajo, newPass) {
-    // 1) Cambiar la contraseña en Supabase Auth (la sesión activa ya tiene el token)
-    const { error: authError } = await supabase.auth.updateUser({ password: newPass })
-    console.log('changePassword auth response:', { legajo, authError })
-    if (authError) { console.error('changePassword auth:', authError); return null }
-
-    // 2) Marcar el cambio mediante una RPC acotada al usuario autenticado.
-      // No se permite UPDATE directo sobre la fila de usuarios: evita que un
-      // usuario pueda modificar su propio rol, estado o máquina asignada.
-      const { error: metaError } = await supabase.rpc('marcar_password_cambiada')
-      if (metaError) { console.error('changePassword metadata:', metaError); return null }
-
-      const { data, error } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('legajo', legajo)
-        .maybeSingle()
-
-      if (error) { console.error('changePassword usuarios:', error); return null }
-      if (!data) { console.log('changePassword: usuario no encontrado', { legajo }); return null }
-
-      const updatedUser = mapUserFromDb(data)
-    const current = await this.getCurrentUser()
-    if (current?.legajo === legajo) {
-      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser))
-    }
-    return updatedUser
+    return cambiarPasswordPuesto({
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
+      mapUser: mapUserFromDb, legajo, newPass,
+    });
   },
 
   // ===== MÁQUINAS =====
@@ -1546,19 +1502,31 @@ const PantallaLogin = ({ onLogin, t }) => {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
-    if (!legajo || !password) {
+    if (loading) return;
+    if (!legajo.trim() || !password) {
       setError('Completá ambos campos');
       return;
     }
     setLoading(true);
     setError('');
-    const user = await dataService.login(legajo, password);
-    setLoading(false);
-    if (user) {
-      await dataService.logEvent({ accion: 'LOGIN', usuario: `${user.nombre} ${user.apellido}`, desc: `Inicio de sesión · rol ${user.rol}` });
-      onLogin(user);
-    } else {
-      setError('Legajo o contraseña incorrectos');
+    try {
+      const usuario = await dataService.login(legajo, password);
+      if (!usuario) {
+        setError('No se pudo validar la cuenta o su perfil activo.');
+        return;
+      }
+      // El evento complementario no debe dejar una sesión válida sin UI.
+      try {
+        await dataService.logEvent({
+          accion: 'LOGIN', usuario: `${usuario.nombre} ${usuario.apellido}`,
+          desc: `Inicio de sesión · rol ${usuario.rol}`,
+        });
+      } catch { /* registro principal de Auth ya validado */ }
+      onLogin(usuario);
+    } catch {
+      setError('No se pudo completar la autenticación. Revisá tu conexión.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1636,10 +1604,27 @@ const PantallaCambioPassword = ({ user, onChanged, t }) => {
   const handleSubmit = async () => {
     if (pass1.length < 12) { setError('La contraseña debe tener al menos 12 caracteres'); return; }
     if (pass1 !== pass2) { setError('Las contraseñas no coinciden'); return; }
-    if (pass1 === user.password) { setError('No podés usar la misma contraseña'); return; }
-    const updated = await dataService.changePassword(user.legajo, pass1);
-    await dataService.logEvent({ accion: 'UPDATE', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cambio de contraseña' });
-    onChanged(updated);
+    // La contraseña previa no se almacena en el objeto de usuario.
+    setError('');
+    try {
+      const updated = await dataService.changePassword(user.legajo, pass1);
+      if (!updated?.authUserId) {
+        setError('No se confirmó el cambio completo. La contraseña de Auth podría haberse actualizado; si es necesario, volvé a iniciar sesión con la nueva.');
+        return;
+      }
+      try {
+        await dataService.logEvent({
+          accion: 'UPDATE', usuario: `${user.nombre} ${user.apellido}`,
+          desc: 'Cambio de contraseña',
+        });
+      } catch { /* El log auxiliar no impide completar el cambio validado. */ }
+      onChanged(updated);
+    } catch {
+      setError('No se pudo confirmar el cambio de contraseña.');
+    } finally {
+      setPass1('');
+      setPass2('');
+    }
   };
 
   return (
@@ -1964,6 +1949,29 @@ const VistaOperario = ({ t, user, refresh }) => {
   const borradorHidratado = useRef(null);
   const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
   const [revisionEditor, setRevisionEditor] = useState(0);
+  const [permisoPuesto, setPermisoPuesto] = useState({ maquina: null, ok: false });
+  const [revisionPuesto, setRevisionPuesto] = useState(0);
+  const permisoPuestoRef = useRef(null);
+  useEffect(() => {
+    const maquina = maquinaInfo?.id;
+    permisoPuestoRef.current = null;
+    setPermisoPuesto({ maquina, ok: false });
+    if (!maquina) return undefined;
+    let vigente = true;
+    const reserva = reservarPuestoMaquina(navigator.locks, maquina);
+    reserva.listo.then(ok => {
+      if (!vigente) return;
+      permisoPuestoRef.current = ok ? maquina : null;
+      setPermisoPuesto({ maquina, ok });
+    });
+    return () => {
+      vigente = false;
+      permisoPuestoRef.current = null;
+      reserva.soltar();
+    };
+  }, [maquinaInfo?.id, revisionPuesto]);
+  const puestoActivo = Boolean(maquinaInfo?.id) &&
+    permisoPuesto.ok && permisoPuesto.maquina === maquinaInfo.id;
   useEffect(() => {
     const id = pruebaPendiente?.requestId;
     if (!id || !pruebaPendiente?.maquina) {
@@ -2062,7 +2070,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
-  const editorActivo = permisoEditor.ok &&
+  const editorActivo = puestoActivo && permisoEditor.ok &&
     permisoEditor.requestId === pruebaPendiente?.requestId &&
     !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
   useEffect(() => {
@@ -2098,6 +2106,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   // limpia del almacenamiento local. Se usa al volver a entrar con una señal
   // que ya superó los 60 minutos.
   const registrarPendienteAuto = async (senal, maquinaId) => {
+    if (permisoPuestoRef.current !== maquinaId) return false;
     try {
       const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
       if (error || borradorTieneCarga(borrador)) {
@@ -2141,7 +2150,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // Restauración coherente para la entrada, el cambio de máquina y la revisión.
   const restaurarEstadoDeMaquina = async maquinaId => {
-    if (!maquinaId) return;
+    if (!maquinaId || permisoPuestoRef.current !== maquinaId) return;
     recuperarSenalConId(maquinaId); // Migración conservadora de una señal antigua.
     const revision = await revisarEstadoLocal(maquinaId);
     if (revision.estado === 'CONFIRMADA_LIMPIA') {
@@ -2208,10 +2217,16 @@ const VistaOperario = ({ t, user, refresh }) => {
       // Recalcular contador y autocompletar lote/producto con último registro de la máquina
       if (m?.id) await recalcularContador(m.id, true);
 
-      await restaurarEstadoDeMaquina(m?.id);
+      // La recuperación puede migrar señales y escribir PENDIENTE; esperar
+      // a obtener exclusividad por máquina antes de tocar el almacenamiento.
     };
     init();
   }, [user]);
+
+  useEffect(() => {
+    if (!puestoActivo || !maquinaInfo?.id) return;
+    restaurarEstadoDeMaquina(maquinaInfo.id);
+  }, [puestoActivo, maquinaInfo?.id, revisionPuesto]);
 
   // v7: cambio de máquina para roles de supervisión (carga en cualquier máquina)
   const cambiarMaquina = async (id) => {
@@ -2225,12 +2240,12 @@ const VistaOperario = ({ t, user, refresh }) => {
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
     await recalcularContador(m.id, true);
-    await restaurarEstadoDeMaquina(m.id);
+    // La restauración se dispara sólo al obtener el lock de la nueva máquina.
   };
 
   // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
-    if (!maquinaInfo?.id) return;
+    if (!maquinaInfo?.id || permisoPuestoRef.current !== maquinaInfo.id) return;
     const maquinaId = maquinaInfo.id;
     try {
       // Una sola pestaña puede crear la próxima señal de este operario/máquina.
@@ -2288,7 +2303,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
-    if (!pruebaPendiente || autoGuardado || !editorActivo) return;
+    if (!puestoActivo || permisoPuestoRef.current !== pruebaPendiente?.maquina || !pruebaPendiente || autoGuardado || !editorActivo) return;
     // No sustituir un ensayo ya enviado por un PENDIENTE con el mismo UUID.
     if (almacenIntentos.leer(pruebaPendiente.maquina)) {
       setErrorBorrador('Hay un intento previo de envío. Revisá su confirmación antes de continuar.');
@@ -2439,7 +2454,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
-    if (submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
+    if (permisoPuestoRef.current !== pruebaPendiente?.maquina || submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
@@ -2494,7 +2509,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   // Recupera el payload original de un envío anterior sin reconstruirlo
   // desde campos que pudieron cambiar, ni inventar un nuevo identificador.
   const reintentarEnvioPrevio = async () => {
-    if (submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
+    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
         !maquinaInfo?.id || !estadoRecuperacion.requestId ||
         (pruebaPendiente && !editorActivo)) return;
     setSubmitting(true);
@@ -2543,14 +2558,14 @@ const VistaOperario = ({ t, user, refresh }) => {
             : estadoRecuperacion.estado === 'ENVIO_PREVIO'
               ? 'Intento anterior pendiente de revisión' : 'Registro local que requiere atención'}</strong>
           <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoRecuperacion.mensaje}</p>
-          <button type="button" disabled={!maquinaInfo?.id || submitting}
+          <button type="button" disabled={!puestoActivo || !maquinaInfo?.id || submitting}
             onClick={() => restaurarEstadoDeMaquina(maquinaInfo.id)}
             style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
             Consultar servidor y revisar registro local
           </button>
           {estadoRecuperacion.estado === 'ENVIO_PREVIO' && (
             <button type="button"
-              disabled={submitting || (Boolean(pruebaPendiente) && !editorActivo)}
+              disabled={!puestoActivo || submitting || (Boolean(pruebaPendiente) && !editorActivo)}
               onClick={reintentarEnvioPrevio}
               style={{ padding: '8px 12px', marginLeft: 8, borderRadius: 6,
                 border: `1px solid ${t.border}`, background: t.surfaceHi,
@@ -2558,6 +2573,19 @@ const VistaOperario = ({ t, user, refresh }) => {
               Reintentar exactamente el envío anterior
             </button>
           )}
+        </div>
+      )}
+      {!puestoActivo && maquinaInfo?.id && (
+        <div role="alert" style={{ padding: 14, marginBottom: 12,
+          border: `1px solid ${t.warn}`, borderRadius: 8,
+          background: t.warnSoft, color: t.text }}>
+          Esta máquina está abierta en otra pestaña o el navegador no admite
+          bloqueo exclusivo. No se permite iniciar, recuperar ni enviar pruebas.
+          Cerrá la otra pestaña y volvé a intentar.
+          <button type="button" onClick={() => setRevisionPuesto(n => n + 1)}
+            style={{ display: 'block', marginTop: 8, padding: '8px 12px' }}>
+            Intentar tomar el puesto
+          </button>
         </div>
       )}
       {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
@@ -2665,7 +2693,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             En MAQ-010 el aviso real se muestra en la HMI Kinco; para otras máquinas seguí el procedimiento industrial vigente.
             Este botón inicia un registro manual: no recibe datos del PLC ni verifica la hora del aviso.
           </p>
-          <button onClick={generarSenalPLC} disabled={!maquinaInfo?.id} style={{
+          <button onClick={generarSenalPLC} disabled={!puestoActivo || !maquinaInfo?.id} style={{
             marginTop: 24, padding: '14px 28px',
             background: maquinaInfo?.id ? t.accent : t.surfaceHi,
             color: maquinaInfo?.id ? t.bg : t.textDim,
@@ -6053,6 +6081,9 @@ export default function App() {
   const esModoPasillo = typeof window !== 'undefined' && window.location.search.includes('pasillo');
 
   const [user, setUser] = useState(null);
+  const [cierreEnCurso, setCierreEnCurso] = useState(false);
+  const authRevision = useRef(0);
+  const cerrandoSesion = useRef(false);
   const [hora, setHora] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [operarioTab, setOperarioTab] = useState('produccion');
@@ -6060,7 +6091,49 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState('calidad');
 
   useEffect(() => {
-    if (!esModoPasillo) dataService.getCurrentUser().then(u => setUser(u));
+    if (esModoPasillo) return undefined;
+    let vigente = true;
+    const revalidar = (inicial = false) => {
+      if (cerrandoSesion.current) return;
+      if (!inicial) {
+        // El foco no debe intentar restaurar perfiles que ya cerraron sesión.
+        try {
+          if (!sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)) return;
+        } catch { return; }
+      }
+      const revisionInicial = authRevision.current;
+      dataService.getCurrentUser()
+        .then(u => {
+          if (!vigente || cerrandoSesion.current || revisionInicial !== authRevision.current) return;
+          // La restauración inicial no debe pisar un login más reciente.
+          if (inicial) setUser(actual => actual || u);
+          else setUser(u);
+        })
+        .catch(() => {
+          if (!vigente || cerrandoSesion.current || revisionInicial !== authRevision.current) return;
+          if (inicial) setUser(actual => actual || null);
+          else setUser(null);
+        });
+    };
+    revalidar(true);
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(event => {
+      if (event === 'SIGNED_OUT') {
+        authRevision.current++;
+        limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+        if (vigente) setUser(null);
+      }
+    });
+    // En una estación compartida, regresar a la pestaña exige releer el
+    // estado activo y rol del servidor; no se conserva la autoridad del cache.
+    const alRecuperarFoco = () => revalidar();
+    window.addEventListener('focus', alRecuperarFoco);
+    return () => {
+      vigente = false;
+      authRevision.current++;
+      window.removeEventListener('focus', alRecuperarFoco);
+      authListener?.subscription?.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -6074,9 +6147,40 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
-    await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
-    await dataService.logout();
+    const evidencia = inventariarEvidenciaLocal(localStorage, user.legajo);
+    if (evidencia.estado === 'INCIERTO') {
+      if (!window.confirm('No se pudo comprobar si quedan registros de pruebas en este puesto. Cerrar sesión NO borra esos datos. ¿Cerrar sesión igualmente?')) return;
+    } else if (evidencia.total > 0) {
+      if (!window.confirm(`Hay ${evidencia.total} registros locales de estanqueidad asociados a tu legajo en este navegador. Se conservarán para recuperarlos en el próximo ingreso. ¿Cerrar sesión?`)) return;
+    }
+    cerrandoSesion.current = true;
+    setCierreEnCurso(true);
+    authRevision.current++; // Invalida consultas de sesión que aún estén en vuelo.
+    // La pantalla desaparece ANTES de hacer una llamada de red que podría tardar.
     setUser(null);
+    // Un log de auditoría complementario no puede impedir el cierre local.
+    try {
+      await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
+    } catch (e) {
+      console.warn('No se pudo registrar el log complementario de cierre:', e);
+    }
+    let falloCierreAuth = false;
+    try {
+      await dataService.logout();
+    } catch (e) {
+      falloCierreAuth = true;
+      console.warn('Falló el cierre remoto; se descartó la sesión persistida del puesto.', e);
+    } finally {
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+      setUser(null);
+      cerrandoSesion.current = false;
+      setCierreEnCurso(false);
+      if (falloCierreAuth) {
+        // Tras una falla remota de Auth, reiniciar también la instancia JS
+        // para no reutilizar por accidente un token que quedó sólo en memoria.
+        window.location.reload();
+      }
+    }
   };
 
   if (esModoPasillo) {
@@ -6084,11 +6188,17 @@ export default function App() {
   }
 
   if (!user) {
-    return <PantallaLogin onLogin={setUser} t={t} />;
+    if (cierreEnCurso) {
+      return <div role="status" style={{ minHeight: '100vh', display: 'grid',
+        placeItems: 'center', background: t.bg, color: t.text, fontFamily: 'Manrope' }}>
+        Cerrando sesión de este puesto…
+      </div>;
+    }
+    return <PantallaLogin onLogin={u => { cerrandoSesion.current = false; authRevision.current++; setUser(u); }} t={t} />;
   }
 
   if (user.forceChange) {
-    return <PantallaCambioPassword user={user} onChanged={setUser} t={t} />;
+    return <PantallaCambioPassword user={user} onChanged={u => { cerrandoSesion.current = false; authRevision.current++; setUser(u); }} t={t} />;
   }
 
   const roleTabBtn = (active) => ({
