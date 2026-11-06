@@ -22,7 +22,7 @@ function locks() {
 function client({rpc,record=null,selectError=null}={}) {
  const calls=[];
  return {calls, rpc:async(_name,{p})=>{calls.push(p);return rpc ? rpc(p) : {data:{prueba_id:'id-1',numero_secuencial:1,duplicado:false},error:null}},
- from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:record,error:selectError})})})})};
+ from:()=>({select:()=>({eq(_campo,_valor){return this},maybeSingle:async()=>({data:record,error:selectError})})})};
 }
 const opts=(supabase,storage=memory(),lockManager=locks())=>({supabase,storage,lockManager,test:testPayload});
 test('éxito: se guardó snapshot y la RPC recibió mismo payload',async()=>{
