@@ -57,10 +57,18 @@ test('si falla la limpieza se informa confirmado con residuos y no se pierde evi
  const retry=await recuperarEstadoLocal({...f,consultar:async()=>({estado:'CONFIRMADA',pruebaId:'db-100'})});
  assert.equal(retry.estado,'CONFIRMADA_LIMPIA');
 });
-test('un borrador sin señal jamás se descarta ni habilita nueva prueba',()=>{
+test('un borrador sin señal no se descarta sin consultar al servidor',async()=>{
  const f=fixture();f.borradores.guardar(maquinaId,requestId,{caja:'33'});
- assert.equal(inspeccionarRegistrosLocales(f).estado,'INTERVENCION');
+ assert.equal(inspeccionarRegistrosLocales(f).estado,'HUERFANO');
+ const revision=await recuperarEstadoLocal({...f,consultar:async()=>({estado:'NO_ENCONTRADA'})});
+ assert.equal(revision.estado,'INTERVENCION');
  assert.equal(f.borradores.inspeccionar(maquinaId).requestId,requestId);
+});
+test('borrador huérfano con prueba confirmada puede limpiarse sin perder otros UUID',async()=>{
+ const f=fixture();f.borradores.guardar(maquinaId,requestId,{caja:'33'});
+ const revision=await recuperarEstadoLocal({...f,consultar:async()=>({estado:'CONFIRMADA',pruebaId:'db-confirmado'})});
+ assert.equal(revision.estado,'CONFIRMADA_LIMPIA');
+ assert.equal(f.borradores.inspeccionar(maquinaId).borrador,null);
 });
 test('identificadores cruzados bloquean toda eliminación',()=>{
  const f=fixture();f.senales.guardar(maquinaId,senal);
