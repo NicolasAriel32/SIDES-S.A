@@ -61,3 +61,13 @@
 - El diff de PR #4 contiene sólo cambios frontend, módulos JavaScript, pruebas y documentación (sin ficheros SQL ni claves de producción).
 - Se comprobó que el commit de `main` sigue en `bc45f089d6ebb404bbab7b5e4102378116378107` y que el PR #4 permanece sin fusionar.
 - Riesgo a validar en preview: el BroadcastChannel de Auth podría generar eventos entre pestañas aunque las sesiones estén en `sessionStorage`. La prueba E2E debe verificar que el logout de una pestaña no exponga ni modifique el usuario de otra.
+
+
+## Endurecimiento adicional — bloqueo por máquina y aislamiento de legajos
+
+- `reservarPuestoMaquina()` obtiene Web Lock exclusivo por código de máquina (no por UUID ni por legajo). Sin lock, el formulario no puede enviar, iniciar señales, registrar vencimientos automáticos ni reconciliar el estado local.
+- El lock se libera al desmontar la vista o cambiar de máquina. Si otra pestaña lo ocupa, la segunda queda bloqueada con acción explícita para reintentar.
+- Login y restauración verifican que no existan `senal_plc_`, `spc_borrador_v1_` o `spc_intento_v1_` pertenecientes a otro legajo en el mismo perfil de navegador. Se rechaza la sesión sin eliminar esos datos.
+- Esta medida evita la mezcla **accidental** de usuarios, pero no protege contra acceso deliberado al `localStorage` desde DevTools o desde el mismo perfil Windows. **No se declara resuelta la confidencialidad**: se requiere cifrado de evidencia con llave fuera del almacenamiento compartido o aislamiento de perfiles Windows gestionados.
+- El cifrado de los datos existentes debe diseñarse con migración reversible y prueba de recuperación offline. No borrar ni convertir automáticamente los registros históricos locales sin una estrategia de recuperación.
+- No se aplicaron cambios a Supabase producción ni a `main`. Continúa prohibido el deploy hasta QA E2E.
