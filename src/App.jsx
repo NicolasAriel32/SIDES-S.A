@@ -2121,9 +2121,11 @@ const VistaOperario = ({ t, user, refresh }) => {
       } catch (auditError) {
         console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
-      limpiarSenal(maquinaId, senal.requestId);
-      almacenBorradores.borrarConfirmado(maquinaId, senal.requestId);
-      almacenIntentos.borrarConfirmado(maquinaId, senal.requestId);
+      const limpieza = limpiarConfirmado(maquinaId, senal.requestId, inserted.supabase_id);
+      // La RPC ya confirmó la prueba; una falla local NO la vuelve a enviar.
+      if (limpieza.estado !== 'CONFIRMADA_LIMPIA') {
+        console.warn('Prueba confirmada con residuos locales:', limpieza.mensaje);
+      }
       return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
@@ -2291,6 +2293,12 @@ const VistaOperario = ({ t, user, refresh }) => {
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
     if (!pruebaPendiente || autoGuardado || !editorActivo) return;
+    // No sustituir un ensayo ya enviado por un PENDIENTE con el mismo UUID.
+    if (almacenIntentos.leer(pruebaPendiente.maquina)) {
+      setErrorBorrador('Hay un intento previo de envío. Revisá su confirmación antes de continuar.');
+      setAutoGuardado(true);
+      return;
+    }
     const { borrador, error } = almacenBorradores.leer(pruebaPendiente.maquina, pruebaPendiente.requestId);
     if (error || borradorTieneCarga(borrador)) {
       setErrorBorrador(error || 'Hay datos cargados. No se registró un PENDIENTE automático.');
@@ -2331,11 +2339,9 @@ const VistaOperario = ({ t, user, refresh }) => {
       setErrorPendiente('No se pudo confirmar el registro pendiente. Se conservó la señal local.');
       return;
     }
-    // Sólo limpiar la señal cuando la RPC confirmó el registro.
+    // No considerar fallida una prueba que ya fue confirmada en el servidor.
     if (maquinaInfo?.id) {
-      limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
-      almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
-      almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+      limpiarConfirmado(maquinaInfo.id, pruebaPendiente.requestId, inserted.supabase_id);
     }
     borradorHidratado.current = null;
     setPruebaPendiente(null);
@@ -2470,9 +2476,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       }
       // La RPC y los triggers guardan la evidencia; createTest hace log complementario.
       if (maquinaInfo?.id) {
-        limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
-        almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
-        almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+        limpiarConfirmado(maquinaInfo.id, pruebaPendiente.requestId, inserted.supabase_id);
       }
       borradorHidratado.current = null; // ACK sólo para el UUID confirmado
 
