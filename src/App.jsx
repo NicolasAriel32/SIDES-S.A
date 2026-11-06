@@ -26,6 +26,10 @@ import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/segurida
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
+import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
+import { asegurarAsignacionTurnoEnServidor } from './api/asignacionVerificaciones.js';
+import { evaluarConcordanciaContramuestra } from './domain/concordanciaContramuestra.js';
+import { completarContramuestraEnServidor } from './api/cierreContramuestra.js';
 
 
 /* =================================================================
@@ -504,7 +508,7 @@ const dataService = {
   // La RLS ya restringe qué ve/edita cada supervisor (supervisor_asignado_id =
   // auth.uid()), así que toda esta lógica corre del lado del cliente, igual
   // que el resto del sistema.
-  CANTIDAD_VERIFICACIONES: 2,
+  // VF-002: la cantidad existente (2) ahora es exclusiva del contrato SQL.
 
   // Devuelve las verificaciones del supervisor logueado que siguen PENDIENTE,
   // con los datos de la prueba a buscar en el almacén.
@@ -515,14 +519,15 @@ const dataService = {
         *,
         prueba:prueba_id (
           numero_secuencial, id_maquina, numero_caja, numero_lote,
-          codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado
+          codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado,
+           cantidad_cabezales_afectados, estado_final, anulada
         )
       `)
       .eq('resultado', 'PENDIENTE')
       .order('fecha_seleccion', { ascending: true })
 
     console.log('getVerificacionesPendientes response:', { data, error })
-    if (error) { console.error('getVerificacionesPendientes:', error); return [] }
+    if (error) { console.error('getVerificacionesPendientes: fallo de lectura'); throw new Error('VF_LECTURA_FALLIDA') }
 
     const usuariosMap = await this.getUsersCache()
     return (data || []).map(v => {
@@ -542,120 +547,42 @@ const dataService = {
         lote:           p.numero_lote,
         codigoProducto: p.codigo_producto,
         resultadoPrueba: p.resultado,
+        cabezalesDefectuosos: p.cantidad_cabezales_afectados,
+        anulada: p.anulada,
+        estadoFinal: p.estado_final,
         operario:       usuariosMap.get(p.operario_legajo) || p.operario_legajo || '',
         fechaSenal:     normalizarFechaUTC(fechaP),
       }
     })
   },
 
-  // Asigna (una sola vez, idempotente) las verificaciones del turno ANTERIOR
-  // al supervisor entrante. Devuelve true si hay algo pendiente de verificar.
-  async asegurarVerificacionesTurnoAnterior(supervisorAuthId, supervisorLegajo, supervisorNombre) {
-    if (!supervisorAuthId) {
-      const { data: { user } } = await supabase.auth.getUser()
-      supervisorAuthId = user?.id
-    }
-    if (!supervisorAuthId) { console.error('asegurarVerificaciones: sin auth uid'); return false }
-
-    const { inicioAnterior, finAnterior, codigoAnterior } = ventanaTurnoAnterior()
-
-    // 1) Pruebas no anuladas del turno anterior
-    const { data: pruebasTurno, error: errPruebas } = await supabase
-      .from('pruebas')
-      .select('id, numero_secuencial')
-      .gte('created_at', inicioAnterior.toISOString())
-      .lt('created_at', finAnterior.toISOString())
-      .eq('anulada', false)
-
-    if (errPruebas) { console.error('asegurarVerificaciones pruebas:', errPruebas); return false }
-    if (!pruebasTurno || pruebasTurno.length === 0) {
-      console.log('asegurarVerificaciones: turno anterior sin pruebas; nada que verificar')
-      return false
-    }
-
-    // 2) Idempotencia: ¿ya hay verificaciones para alguna de esas pruebas?
-    const ids = pruebasTurno.map(p => p.id)
-    const { data: yaExisten, error: errExist } = await supabase
-      .from('verificaciones_fisicas')
-      .select('id')
-      .in('prueba_id', ids)
-      .limit(1)
-
-    if (errExist) { console.error('asegurarVerificaciones existentes:', errExist); return false }
-    if (yaExisten && yaExisten.length > 0) {
-      console.log('asegurarVerificaciones: el turno anterior ya tenía verificaciones asignadas')
-      return true
-    }
-
-    // 3) Elegir N pruebas al azar e insertarlas
-    const barajadas = [...pruebasTurno].sort(() => Math.random() - 0.5)
-    const elegidas  = barajadas.slice(0, this.CANTIDAD_VERIFICACIONES)
-    const turnos    = await this.getTurnos()
-    const turnoOrigenId = turnos.find(tn => tn.codigo === codigoAnterior)?.id || null
-    const fechaCod  = (fechaLocalAR(new Date()) || '').replace(/-/g, '')
-
-    const filas = elegidas.map(p => ({
-      codigo:                 `VF-${fechaCod}-${String(p.numero_secuencial).padStart(4, '0')}`,
-      prueba_id:              p.id,
-      turno_origen_id:        turnoOrigenId,
-      supervisor_asignado_id: supervisorAuthId,
-      resultado:              'PENDIENTE',
-    }))
-
-    const { data: insertadas, error: errInsert } = await supabase
-      .from('verificaciones_fisicas')
-      .insert(filas)
-      .select()
-
-    if (errInsert) { console.error('asegurarVerificaciones insert:', errInsert); return false }
-
-    await this.logEvent({
-      accion:        'CREATE',
-      usuario:       supervisorNombre || supervisorLegajo,
-      usuarioLegajo: supervisorLegajo,
-      desc:          `Asignó ${filas.length} verificaciones físicas aleatorias del turno ${codigoAnterior}`,
-      tabla:         'verificaciones_fisicas',
-    })
-    return (insertadas || []).length > 0
+  // VF-002: el servidor decide ventana, sorteo y destinatario en una transaccion.
+  // Nada se inserta en verificaciones_fisicas desde el navegador.
+  async asegurarVerificacionesTurnoAnterior() {
+    return asegurarAsignacionTurnoEnServidor(supabase);
   },
 
-  // Completa una verificación. resultado = OK solo si todo coincide; si no,
-  // DISCREPANCIA + genera_nc para que el supervisor abra la no conformidad.
+  // Cierre seguro: el servidor revalida el registro y computa resultado.
+  // Nunca se escribe directamente en verificaciones_fisicas desde el navegador.
   async completarVerificacion(id, payload, supervisorLegajo, supervisorNombre) {
-    const ok = payload.muestrasPresentes === 'si_todas'
-      && payload.coincideEtiquetaLote === true
-      && payload.coincideCaja === true
-    const resultado = ok ? 'OK' : 'DISCREPANCIA'
-
-    const { data, error } = await supabase
-      .from('verificaciones_fisicas')
-      .update({
-        fecha_verificacion:     new Date().toISOString(),
-        muestras_presentes:     payload.muestrasPresentes,
-        cantidad_encontrada:    payload.cantidadEncontrada ?? null,
-        coincide_etiqueta_lote: payload.coincideEtiquetaLote,
-        coincide_caja:          payload.coincideCaja,
-        observaciones:          payload.observaciones || null,
-        resultado,
-        genera_nc:              resultado === 'DISCREPANCIA',
-        updated_at:             new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .maybeSingle()
-
-    console.log('completarVerificacion response:', { id, resultado, data, error })
-    if (error) { console.error('completarVerificacion:', error); return null }
-
-    await this.logEvent({
-      accion:        'UPDATE',
-      usuario:       supervisorNombre || supervisorLegajo,
-      usuarioLegajo: supervisorLegajo,
-      desc:          `Completó verificación física ${data?.codigo || id} · ${resultado}`,
-      tabla:         'verificaciones_fisicas',
-      registroId:    id,
-    })
-    return { id, resultado }
+    const respuesta = await completarContramuestraEnServidor(supabase, id, payload);
+    if (!respuesta) return null;
+    if (!respuesta.duplicado) {
+      try {
+        await this.logEvent({
+          accion: 'UPDATE',
+          usuario: supervisorNombre || supervisorLegajo,
+          usuarioLegajo: supervisorLegajo,
+          desc: 'Completó verificación física ' + id + ' · ' + respuesta.resultado,
+          tabla: 'verificaciones_fisicas',
+          registroId: id,
+        });
+      } catch (auditError) {
+        // La RPC ya confirmó el cierre; la auditoría auxiliar no lo revierte.
+        console.error('No se pudo guardar auditoría auxiliar de cliente');
+      }
+    }
+    return respuesta;
   },
 
   // ===== PRUEBAS =====
@@ -719,6 +646,7 @@ const dataService = {
         cantidadesTipos:     p.spc_request_id ? Object.fromEntries((p.fallas || []).map(f => [f.tipo_falla_id, f.cantidad_items_afectados])) : null,
         origenEvento:        p.spc_origen_evento ?? 'HISTORICO_NO_VERIFICADO',
         aptitudSpc:          p.spc_uso_estadistico ?? 'NO_VALIDADO',
+        cabezalesInspeccionados: p.spc_cabezales_inspeccionados ?? null,
         cabezalesFalla:      p.cantidad_cabezales_afectados ?? 0,
         tuvoFalla:           p.tuvo_falla === true,
         esperandoAprobacion: (p.tuvo_falla === true && ['PENDIENTE_APROBACION','REVISION_100_CAJA'].includes(p.estado_final)),
@@ -3442,6 +3370,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
   const [total] = useState(verificaciones.length);
   const [muestrasPresentes, setMuestrasPresentes] = useState('');
   const [cantidadEncontrada, setCantidadEncontrada] = useState('');
+  const [defectuososEncontrados, setDefectuososEncontrados] = useState('');
   const [coincideEtiquetaLote, setCoincideEtiquetaLote] = useState(null);
   const [coincideCaja, setCoincideCaja] = useState(null);
   const [observaciones, setObservaciones] = useState('');
@@ -3452,13 +3381,26 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
   const numeroActual = total - pendientes.length + 1;
 
   const resetForm = () => {
-    setMuestrasPresentes(''); setCantidadEncontrada('');
+    setMuestrasPresentes(''); setCantidadEncontrada(''); setDefectuososEncontrados('');
     setCoincideEtiquetaLote(null); setCoincideCaja(null);
     setObservaciones('');
   };
 
-  const completo = muestrasPresentes !== '' && coincideEtiquetaLote !== null && coincideCaja !== null;
-  const seraOk = muestrasPresentes === 'si_todas' && coincideEtiquetaLote === true && coincideCaja === true;
+  const comoEntero = s => /^\d+$/.test(s) && Number.isSafeInteger(Number(s))
+    ? Number(s) : null;
+  const hallazgo = {
+    muestrasPresentes,
+    cantidadEncontrada: comoEntero(cantidadEncontrada),
+    defectuososEncontrados: comoEntero(defectuososEncontrados),
+    coincideEtiquetaLote, coincideCaja,
+  };
+  const evaluacion = evaluarConcordanciaContramuestra({
+    caja: actual.caja, lote: actual.lote,
+    resultado: actual.resultadoPrueba, estadoFinal: actual.estadoFinal,
+    anulada: actual.anulada, cabezalesDefectuosos: actual.cabezalesDefectuosos,
+  }, hallazgo);
+  const completo = evaluacion.listo;
+  const seraOk = evaluacion.resultado === 'OK';
 
   const horaPrueba = actual.fechaSenal
     ? new Date(actual.fechaSenal).toLocaleString('es-AR', {
@@ -3474,7 +3416,8 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
       actual.id,
       {
         muestrasPresentes,
-        cantidadEncontrada: cantidadEncontrada !== '' ? Number(cantidadEncontrada) : null,
+        cantidadEncontrada: hallazgo.cantidadEncontrada,
+        defectuososEncontrados: hallazgo.defectuososEncontrados,
         coincideEtiquetaLote,
         coincideCaja,
         observaciones,
@@ -3563,6 +3506,13 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
             <Campo label="N° CAJA" valor={actual.caja} />
             <Campo label="N° LOTE" valor={actual.lote} />
             <Campo label="PRODUCTO" valor={actual.codigoProducto} />
+            <Campo label="ESPERADOS" valor="20 cabezales" />
+            <Campo label="CON DEFECTOS (DIGITAL)"
+              valor={Number.isInteger(actual.cabezalesDefectuosos)
+                ? String(actual.cabezalesDefectuosos) : 'Dato no disponible'} />
+            <Campo label="SIN DEFECTOS (DIGITAL)"
+              valor={Number.isInteger(actual.cabezalesDefectuosos)
+                ? String(20 - actual.cabezalesDefectuosos) : 'Dato no disponible'} />
           </div>
 
           {/* Formulario */}
@@ -3590,10 +3540,10 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
 
             <div>
               <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
-                Cantidad encontrada (opcional)
+                Cantidad total de cabezales encontrada (obligatoria)
               </div>
               <input
-                type="number" min="0" value={cantidadEncontrada}
+                type="number" min="0" step="1" value={cantidadEncontrada}
                 onChange={e => setCantidadEncontrada(e.target.value)}
                 placeholder="N° de unidades halladas"
                 style={{
@@ -3603,7 +3553,30 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                 }} />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                Cabezales identificados con defectos (obligatorio)
+              </div>
+              <input
+                type="number" min="0" step="1" value={defectuososEncontrados}
+                onChange={e => setDefectuososEncontrados(e.target.value)}
+                placeholder="Cantidad de cabezales con defectos encontrada"
+                style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 6,
+                  border: '1px solid ' + t.border, background: t.surfaceHi, color: t.text,
+                  fontFamily: 'Manrope', fontSize: 13, boxSizing: 'border-box'
+                }}
+              />
+              {comoEntero(cantidadEncontrada) !== null &&
+                comoEntero(defectuososEncontrados) !== null &&
+                comoEntero(defectuososEncontrados) <= comoEntero(cantidadEncontrada) && (
+                <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginTop: 5 }}>
+                  Sin defectos hallados: {comoEntero(cantidadEncontrada) - comoEntero(defectuososEncontrados)}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}> 
               <div>
                 <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
                   ¿Coincide etiqueta/lote?
@@ -3631,6 +3604,20 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                   fontFamily: 'Manrope', fontSize: 13, resize: 'vertical', boxSizing: 'border-box'
                 }} />
             </div>
+
+            {!completo && evaluacion.razones.length > 0 && (
+              <div role="alert" style={{
+                padding: '10px 12px', border: '1px solid ' + t.border, borderRadius: 6,
+                fontFamily: 'Manrope', fontSize: 12, color: t.warn,
+              }}>
+                No se puede registrar todavía: faltan datos o existen respuestas
+                contradictorias. Si falta información del registro digital,
+                avisá al responsable; la verificación quedará pendiente.
+                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, marginTop: 4 }}>
+                  {evaluacion.razones.join(' · ')}
+                </div>
+              </div>
+            )}
 
             {completo && (
               <div style={{
@@ -3687,6 +3674,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // Verificaciones físicas del turno anterior (anti-fraude)
   const [verifPendientes, setVerifPendientes] = useState([]);
   const [mostrarVerif, setMostrarVerif] = useState(false);
+  const [errorVerificaciones, setErrorVerificaciones] = useState(false);
+  const [errorAsignacion, setErrorAsignacion] = useState(false);
+  const [avisoAsignacion, setAvisoAsignacion] = useState(null);
   const [mostrarFormNC, setMostrarFormNC] = useState(false);
   const [ncCajaDesde, setNcCajaDesde] = useState('');
   const [ncCantidadCajas, setNcCantidadCajas] = useState('');
@@ -3694,13 +3684,26 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [decisionLoading, setDecisionLoading] = useState(false);
   const [decisionError, setDecisionError] = useState('');
 
+  const actualizarVerificaciones = async () => {
+    try {
+      const pendientes = await dataService.getVerificacionesPendientes();
+      setVerifPendientes(pendientes);
+      setErrorVerificaciones(false);
+      return pendientes;
+    } catch {
+      setErrorVerificaciones(true);
+      // Nunca reemplazar un error por lista vacía («sin verificaciones»).
+      return null;
+    }
+  };
+
   const reload = async () => {
     setMachines(await dataService.getMachines());
     // FIX v7: solo trae pruebas del turno activo para que el turno noche
     // no mezcle registros del día anterior al cruzar la medianoche.
     setTests(await dataService.getTests(inicioTurnoActual()));
     setUnreadObs(await dataService.getAllUnreadObservations());
-    setVerifPendientes(await dataService.getVerificacionesPendientes());
+    await actualizarVerificaciones();
   };
 
   useEffect(() => {
@@ -3709,22 +3712,27 @@ const VistaSupervisor = ({ t, currentUser }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // Verificaciones físicas: al ingresar el supervisor, asignar (si todavía no
-  // existen) 2 pruebas al azar del turno anterior y pedirle que las corrobore.
+  // VF-002: una RPC transaccional asigna una vez por turno y mantiene
+  // resultados distinguibles: asignada a mi, a otro, legado o sin pruebas.
   useEffect(() => {
     let cancelado = false;
     (async () => {
       try {
-        await dataService.asegurarVerificacionesTurnoAnterior(
-          null, currentUser?.legajo, currentUser?.nombre
+        const asignacion = await dataService.asegurarVerificacionesTurnoAnterior();
+        if (cancelado) return;
+        setErrorAsignacion(false);
+        setAvisoAsignacion(
+          asignacion.estado === 'ASIGNADA_A_OTRO'
+            ? 'El control aleatorio de este turno ya fue asignado a otro encargado. No se creó una segunda selección.'
+            : asignacion.estado === 'LEGADO_EXISTENTE'
+              ? 'Hay verificaciones creadas con el sistema anterior para este turno. No se generaron duplicados; revisar su asignación.'
+              : null
         );
-        const pend = await dataService.getVerificacionesPendientes();
-        if (!cancelado) {
-          setVerifPendientes(pend);
-          if (pend.length > 0) setMostrarVerif(true);
-        }
-      } catch (e) {
-        console.error('init verificaciones físicas:', e);
+        const pend = await actualizarVerificaciones();
+        if (!cancelado && pend && pend.length > 0) setMostrarVerif(true);
+      } catch {
+        if (!cancelado) setErrorAsignacion(true);
+        // Error de RPC no equivale a ausencia de controles.
       }
     })();
     return () => { cancelado = true; };
@@ -3993,6 +4001,25 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </div>
       )}
 
+      {(errorVerificaciones || errorAsignacion) && (
+        <div role="alert" style={{
+          padding: 12, border: '1px solid ' + t.border, borderRadius: 6,
+          fontFamily: 'Manrope', fontSize: 12, color: t.warn, marginBottom: 12,
+        }}>
+          No se pudo completar la asignación o consulta del control aleatorio.
+          No se puede afirmar que no haya verificaciones pendientes.
+          Revisá la conexión y que la función VF-002 esté disponible.
+        </div>
+      )}
+      {avisoAsignacion && (
+        <div role="status" style={{
+          padding: 12, border: '1px solid ' + t.border, borderRadius: 6,
+          fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginBottom: 12,
+        }}>
+          {avisoAsignacion}
+        </div>
+      )}
+
       {mostrarVerif && verifPendientes.length > 0 && (
         <ModalVerificacionFisica
           t={t}
@@ -4000,12 +4027,11 @@ const VistaSupervisor = ({ t, currentUser }) => {
           verificaciones={verifPendientes}
           onClose={async () => {
             setMostrarVerif(false);
-            setVerifPendientes(await dataService.getVerificacionesPendientes());
+            await actualizarVerificaciones();
           }}
           onDone={async () => {
-            const pend = await dataService.getVerificacionesPendientes();
-            setVerifPendientes(pend);
-            setMostrarVerif(false);
+            const pend = await actualizarVerificaciones();
+            if (pend) setMostrarVerif(false);
           }}
         />
       )}
@@ -4085,6 +4111,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
           <Pill variant="danger" t={t} mono>{pruebasBloqueadas}</Pill>
         </div>
       )}
+
+      {/* SPC-002: observación estadística MAQ-010, sin decisiones automáticas */}
+      <PanelSpcPiloto t={t} supabase={supabase} />
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
