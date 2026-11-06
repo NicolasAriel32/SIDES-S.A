@@ -25,6 +25,7 @@ import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorE
 import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
+import { evaluarPreflight, reportePreflightSeguro } from './domain/preflightPuesto.js';
 
 
 /* =================================================================
@@ -2070,6 +2071,28 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
+  const preflightPuesto = evaluarPreflight({
+    estadoLocal: estadoRecuperacion?.estado || (pruebaPendiente ? 'ABIERTA' : 'LIBRE'),
+    tieneLock: puestoActivo,
+    authVerificada: Boolean(user?.authUserId),
+    storageDisponible: (() => {
+      try { return typeof localStorage.length === 'number'; }
+      catch { return false; }
+    })(),
+    navegadorSeguro: typeof window !== 'undefined' && window.isSecureContext === true,
+    online: typeof navigator !== 'undefined' && navigator.onLine === true,
+  });
+  const diagnosticoSeguro = reportePreflightSeguro(preflightPuesto);
+  const copiarDiagnostico = () => {
+    const reporte = JSON.stringify(diagnosticoSeguro, null, 2);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(reporte).catch(() => {
+        window.prompt('Copiá el diagnóstico (sin datos de pruebas)', reporte);
+      });
+    } else {
+      window.prompt('Copiá el diagnóstico (sin datos de pruebas)', reporte);
+    }
+  };
   const editorActivo = puestoActivo && permisoEditor.ok &&
     permisoEditor.requestId === pruebaPendiente?.requestId &&
     !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
@@ -2573,6 +2596,19 @@ const VistaOperario = ({ t, user, refresh }) => {
               Reintentar exactamente el envío anterior
             </button>
           )}
+        </div>
+      )}
+      {maquinaInfo?.id && (
+        <div style={{ border: `1px solid ${t.border}`, borderRadius: 8,
+          padding: '10px 12px', marginBottom: 12, fontSize: 12 }}>
+          <strong>Diagnóstico del puesto (sin datos de ensayos): </strong>
+          {diagnosticoSeguro.modo} · {diagnosticoSeguro.estado}
+          {diagnosticoSeguro.bloqueantes.length > 0 &&
+            <span> · Revisar: {diagnosticoSeguro.bloqueantes.join(', ')}</span>}
+          <button type="button" onClick={copiarDiagnostico}
+            style={{ marginLeft: 12, padding: '5px 8px' }}>
+            Copiar diagnóstico seguro
+          </button>
         </div>
       )}
       {!puestoActivo && maquinaInfo?.id && (
