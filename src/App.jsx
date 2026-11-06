@@ -27,7 +27,7 @@ import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerr
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
 import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
-import { seleccionarVerificacionesAleatorias } from './domain/seleccionVerificaciones.js';
+import { asegurarAsignacionTurnoEnServidor } from './api/asignacionVerificaciones.js';
 import { evaluarConcordanciaContramuestra } from './domain/concordanciaContramuestra.js';
 import { completarContramuestraEnServidor } from './api/cierreContramuestra.js';
 
@@ -508,7 +508,7 @@ const dataService = {
   // La RLS ya restringe qué ve/edita cada supervisor (supervisor_asignado_id =
   // auth.uid()), así que toda esta lógica corre del lado del cliente, igual
   // que el resto del sistema.
-  CANTIDAD_VERIFICACIONES: 2,
+  // VF-002: la cantidad existente (2) ahora es exclusiva del contrato SQL.
 
   // Devuelve las verificaciones del supervisor logueado que siguen PENDIENTE,
   // con los datos de la prueba a buscar en el almacén.
@@ -556,74 +556,10 @@ const dataService = {
     })
   },
 
-  // Asigna (una sola vez, idempotente) las verificaciones del turno ANTERIOR
-  // al supervisor entrante. Devuelve true si hay algo pendiente de verificar.
-  async asegurarVerificacionesTurnoAnterior(supervisorAuthId, supervisorLegajo, supervisorNombre) {
-    if (!supervisorAuthId) {
-      const { data: { user } } = await supabase.auth.getUser()
-      supervisorAuthId = user?.id
-    }
-    if (!supervisorAuthId) { console.error('asegurarVerificaciones: sin auth uid'); return false }
-
-    const { inicioAnterior, finAnterior, codigoAnterior } = ventanaTurnoAnterior()
-
-    // 1) Pruebas no anuladas del turno anterior
-    const { data: pruebasTurno, error: errPruebas } = await supabase
-      .from('pruebas')
-      .select('id, numero_secuencial')
-      .gte('created_at', inicioAnterior.toISOString())
-      .lt('created_at', finAnterior.toISOString())
-      .eq('anulada', false)
-
-    if (errPruebas) { console.error('asegurarVerificaciones pruebas:', errPruebas); return false }
-    if (!pruebasTurno || pruebasTurno.length === 0) {
-      console.log('asegurarVerificaciones: turno anterior sin pruebas; nada que verificar')
-      return false
-    }
-
-    // 2) Idempotencia: ¿ya hay verificaciones para alguna de esas pruebas?
-    const ids = pruebasTurno.map(p => p.id)
-    const { data: yaExisten, error: errExist } = await supabase
-      .from('verificaciones_fisicas')
-      .select('id')
-      .in('prueba_id', ids)
-      .limit(1)
-
-    if (errExist) { console.error('asegurarVerificaciones existentes:', errExist); return false }
-    if (yaExisten && yaExisten.length > 0) {
-      console.log('asegurarVerificaciones: el turno anterior ya tenía verificaciones asignadas')
-      return true
-    }
-
-    // 3) Elegir N pruebas al azar e insertarlas
-    const elegidas = seleccionarVerificacionesAleatorias(pruebasTurno, this.CANTIDAD_VERIFICACIONES)
-    const turnos    = await this.getTurnos()
-    const turnoOrigenId = turnos.find(tn => tn.codigo === codigoAnterior)?.id || null
-    const fechaCod  = (fechaLocalAR(new Date()) || '').replace(/-/g, '')
-
-    const filas = elegidas.map(p => ({
-      codigo:                 `VF-${fechaCod}-${String(p.numero_secuencial).padStart(4, '0')}`,
-      prueba_id:              p.id,
-      turno_origen_id:        turnoOrigenId,
-      supervisor_asignado_id: supervisorAuthId,
-      resultado:              'PENDIENTE',
-    }))
-
-    const { data: insertadas, error: errInsert } = await supabase
-      .from('verificaciones_fisicas')
-      .insert(filas)
-      .select()
-
-    if (errInsert) { console.error('asegurarVerificaciones insert:', errInsert); return false }
-
-    await this.logEvent({
-      accion:        'CREATE',
-      usuario:       supervisorNombre || supervisorLegajo,
-      usuarioLegajo: supervisorLegajo,
-      desc:          `Asignó ${filas.length} verificaciones físicas aleatorias del turno ${codigoAnterior}`,
-      tabla:         'verificaciones_fisicas',
-    })
-    return (insertadas || []).length > 0
+  // VF-002: el servidor decide ventana, sorteo y destinatario en una transaccion.
+  // Nada se inserta en verificaciones_fisicas desde el navegador.
+  async asegurarVerificacionesTurnoAnterior() {
+    return asegurarAsignacionTurnoEnServidor(supabase);
   },
 
   // Cierre seguro: el servidor revalida el registro y computa resultado.
@@ -3739,6 +3675,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [verifPendientes, setVerifPendientes] = useState([]);
   const [mostrarVerif, setMostrarVerif] = useState(false);
   const [errorVerificaciones, setErrorVerificaciones] = useState(false);
+  const [errorAsignacion, setErrorAsignacion] = useState(false);
+  const [avisoAsignacion, setAvisoAsignacion] = useState(null);
   const [mostrarFormNC, setMostrarFormNC] = useState(false);
   const [ncCajaDesde, setNcCajaDesde] = useState('');
   const [ncCantidadCajas, setNcCantidadCajas] = useState('');
@@ -3774,21 +3712,27 @@ const VistaSupervisor = ({ t, currentUser }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // Verificaciones físicas: al ingresar el supervisor, asignar (si todavía no
-  // existen) 2 pruebas al azar del turno anterior y pedirle que las corrobore.
+  // VF-002: una RPC transaccional asigna una vez por turno y mantiene
+  // resultados distinguibles: asignada a mi, a otro, legado o sin pruebas.
   useEffect(() => {
     let cancelado = false;
     (async () => {
       try {
-        await dataService.asegurarVerificacionesTurnoAnterior(
-          null, currentUser?.legajo, currentUser?.nombre
+        const asignacion = await dataService.asegurarVerificacionesTurnoAnterior();
+        if (cancelado) return;
+        setErrorAsignacion(false);
+        setAvisoAsignacion(
+          asignacion.estado === 'ASIGNADA_A_OTRO'
+            ? 'El control aleatorio de este turno ya fue asignado a otro encargado. No se creó una segunda selección.'
+            : asignacion.estado === 'LEGADO_EXISTENTE'
+              ? 'Hay verificaciones creadas con el sistema anterior para este turno. No se generaron duplicados; revisar su asignación.'
+              : null
         );
         const pend = await actualizarVerificaciones();
-        if (!cancelado && pend) {
-          if (pend.length > 0) setMostrarVerif(true);
-        }
-      } catch (e) {
-        console.error('init verificaciones físicas:', e);
+        if (!cancelado && pend && pend.length > 0) setMostrarVerif(true);
+      } catch {
+        if (!cancelado) setErrorAsignacion(true);
+        // Error de RPC no equivale a ausencia de controles.
       }
     })();
     return () => { cancelado = true; };
@@ -4057,14 +4001,22 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </div>
       )}
 
-      {errorVerificaciones && (
+      {(errorVerificaciones || errorAsignacion) && (
         <div role="alert" style={{
           padding: 12, border: '1px solid ' + t.border, borderRadius: 6,
           fontFamily: 'Manrope', fontSize: 12, color: t.warn, marginBottom: 12,
         }}>
-          No fue posible consultar las verificaciones del turno anterior.
+          No se pudo completar la asignación o consulta del control aleatorio.
           No se puede afirmar que no haya verificaciones pendientes.
-          Revisá la conectividad y el esquema de la base.
+          Revisá la conexión y que la función VF-002 esté disponible.
+        </div>
+      )}
+      {avisoAsignacion && (
+        <div role="status" style={{
+          padding: 12, border: '1px solid ' + t.border, borderRadius: 6,
+          fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginBottom: 12,
+        }}>
+          {avisoAsignacion}
         </div>
       )}
 
