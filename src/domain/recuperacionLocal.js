@@ -42,7 +42,10 @@ export function inspeccionarRegistrosLocales({ maquinaId, senales, borradores, i
     return resultado('HUERFANO', 'Existe un envío sin señal local: se debe consultar el servidor.',
       { requestId, senal: null, borrador });
   }
-  return resultado('INTERVENCION', 'Existe un borrador sin señal ni envío. No se borró.', { requestId });
+  // Un borrador sin señal puede ser residuo de una limpieza parcial previa.
+  // Consultar el servidor por el UUID; NO borrarlo sólo por estar huérfano.
+  return resultado('HUERFANO', 'Existe un borrador sin señal ni envío; debe verificarse en el servidor.',
+    { requestId, senal: null, borrador });
 }
 
 // Sólo invocar después de que la RPC o consulta autenticada confirmó una prueba.
