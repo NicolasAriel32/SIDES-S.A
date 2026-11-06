@@ -2076,6 +2076,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       intentos: almacenIntentos,
       consultar: requestId => consultarConfirmacionPrueba(supabase, requestId,
         { legajo: user.legajo, maquina: maquinaId }),
+      puedeModificar: () => permisoPuestoRef.current === maquinaId,
     });
     // No sobrescribir avisos ni estados de la máquina actual con respuestas
     // tardías recibidas después de liberar su bloqueo exclusivo.
