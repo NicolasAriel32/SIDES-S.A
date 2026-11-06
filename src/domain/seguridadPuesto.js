@@ -79,6 +79,9 @@ export function comprobarPerfilCompartido(storage, legajo) {
     for (let i = 0; i < storage.length; i++) {
       const key = storage.key(i);
       if (typeof key !== 'string') continue;
+      // Los nombres se construyen con prefijo + legajo + '_' + máquina.
+      // El control falla cerrado si hay evidencia ajena, pero no elimina
+      // ni intenta interpretar su contenido.
       if (prefijos.some(p => key.startsWith(p) && !key.startsWith(p + legajo + '_'))) {
         return { ok: false, motivo: 'EVIDENCIA_DE_OTRO_LEGAJO' };
       }
