@@ -22,7 +22,7 @@ import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuale
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
 import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
-import { verificarSesionLocal, inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
+import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 
 
@@ -327,38 +327,42 @@ const dataService = {
   // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
   // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
-    const email = `${legajo.trim()}@sides.internal`
+    const legajoSolicitado = String(legajo || '').trim();
+    if (!legajoSolicitado || !password) return null;
 
-    // 1) Autenticar con Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
-    console.log('login - supabase auth:', { email, user: authData?.user ? 'ok' : 'null', authError })
-
-    if (authError || !authData?.user) {
-      console.log('login: auth fallido', authError?.message)
-      return null
+    let authData;
+    try {
+      const respuesta = await supabase.auth.signInWithPassword({
+        email: `${legajoSolicitado}@sides.internal`, password,
+      });
+      if (respuesta.error || !respuesta.data?.user?.id) return null;
+      authData = respuesta.data;
+    } catch {
+      return null;
     }
 
-    // 2) Traer perfil completo desde la tabla usuarios (roles, máquina, etc.)
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('legajo', legajo.trim())
-      .maybeSingle()
-
-    console.log('login - perfil usuarios:', { data: data ? 'encontrado' : 'null', error })
-
-    if (error || !data || data.activo === false) {
-      console.warn('login: perfil no disponible, rechazado o inactivo; cerrando Auth local.');
-      try { await supabase.auth.signOut({ scope: 'local' }) }
-      catch (e) { console.warn('No se pudo cerrar Auth local:', e) }
-      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
-      return null
+    // La identidad la determina Auth, NO un legajo que el cliente puede escribir.
+    try {
+      const { data, error } = await supabase
+        .from('usuarios').select('*')
+        .eq('id', authData.user.id)
+        .eq('legajo', legajoSolicitado)
+        .maybeSingle();
+      if (error) throw error;
+      const verificacion = verificarPerfilAutenticado({
+        perfil: data, authUser: authData.user, legajoSolicitado,
+      });
+      if (!verificacion.ok) throw new Error(verificacion.motivo);
+      const user = { ...mapUserFromDb(data), authUserId: authData.user.id };
+      // Si el almacenamiento no funciona, no se habilita la sesión.
+      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      return user;
+    } catch {
+      // Una autenticación válida no autoriza usar cualquier perfil accesible por RLS.
+      try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* fail closed */ }
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+      return null;
     }
-
-    const user = { ...mapUserFromDb(data), authUserId: authData.user.id }
-    sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user))
-    console.log('login: éxito', { legajo: user.legajo, rol: user.rol })
-    return user
   },
 
   async logout() {
@@ -372,20 +376,35 @@ const dataService = {
   },
 
   async getCurrentUser() {
-    // getUser valida identidad contra Supabase Auth; getSession solo lee el token local.
-    let authUser = null
+    // Primero verifica Auth en el servidor; después relee el perfil vigente.
+    // Los roles y estado guardados en sessionStorage nunca se aceptan como autoridad.
     try {
-      const { data, error } = await supabase.auth.getUser()
-      if (!error) authUser = data?.user
-    } catch { /* Sin verificación no se reutiliza el perfil anterior. */ }
-    const validacion = verificarSesionLocal({
-      storage: sessionStorage, claveUsuario: STORAGE_KEYS.CURRENT_USER, authUser,
-    })
-    if (!validacion.ok) {
-      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
-      return null
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user?.id) throw new Error('AUTH_NO_VERIFICABLE');
+
+      const local = verificarSesionLocal({
+        storage: sessionStorage, claveUsuario: STORAGE_KEYS.CURRENT_USER,
+        authUser: authData.user,
+      });
+      if (!local.ok) throw new Error(local.motivo);
+
+      const { data: perfil, error: errorPerfil } = await supabase
+        .from('usuarios').select('*')
+        .eq('id', authData.user.id)
+        .eq('legajo', local.usuario.legajo)
+        .maybeSingle();
+      if (errorPerfil) throw errorPerfil;
+      const verificacion = verificarPerfilAutenticado({
+        perfil, authUser: authData.user, legajoSolicitado: local.usuario.legajo,
+      });
+      if (!verificacion.ok) throw new Error(verificacion.motivo);
+      const user = { ...mapUserFromDb(perfil), authUserId: authData.user.id };
+      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      return user;
+    } catch {
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+      return null;
     }
-    return validacion.usuario
   },
 
   async changePassword(legajo, newPass) {
