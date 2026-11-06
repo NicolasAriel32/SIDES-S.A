@@ -347,9 +347,13 @@ const dataService = {
 
     console.log('login - perfil usuarios:', { data: data ? 'encontrado' : 'null', error })
 
-    if (error) { console.error('login perfil error:', error); return null }
-    if (!data) { console.log('login: perfil no encontrado en usuarios'); return null }
-    if (data.activo === false) { console.log('login: usuario inactivo'); return null }
+    if (error || !data || data.activo === false) {
+      console.warn('login: perfil no disponible, rechazado o inactivo; cerrando Auth local.');
+      try { await supabase.auth.signOut({ scope: 'local' }) }
+      catch (e) { console.warn('No se pudo cerrar Auth local:', e) }
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
+      return null
+    }
 
     const user = { ...mapUserFromDb(data), authUserId: authData.user.id }
     sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user))
@@ -360,7 +364,7 @@ const dataService = {
   async logout() {
     // El perfil se borra aunque Auth no responda; la evidencia SPC no se toca.
     try {
-      const { error } = await supabase.auth.signOut()
+      const { error } = await supabase.auth.signOut({ scope: 'local' })
       if (error) throw error
     } finally {
       limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
