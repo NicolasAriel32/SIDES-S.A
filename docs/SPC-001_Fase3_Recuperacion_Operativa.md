@@ -44,3 +44,25 @@ No perder ni reescribir una prueba manual cuando hay caída de conexión, una pe
 - Backups/restauración y plan de rollback antes de migrar producción.
 
 **No desplegar.** Las pruebas automáticas de código permiten continuar el desarrollo, pero no certifican el uso real en planta.
+
+
+## Iteración de revisión de ingeniería (continuación)
+
+- Se detectó y cerró un caso de `JSON null` en los intentos persistidos: antes podía tratarse como ausencia y ser sobrescrito. Ahora se considera corrupción que requiere intervención.
+- Los borradores huérfanos que conservan un UUID ahora se consultan contra el servidor: **se eliminan sólo si la prueba está confirmada**. Si no se puede verificar, se conservan.
+- `src/api/registroSeguro.js` incorpora `reintentarIntentoGuardado`: el operador puede pulsar **Reintentar exactamente el envío anterior** y se retransmite el JSON persistido, sin regenerarlo desde la interfaz. Esto también recupera un `PENDIENTE` automático fallido, que no posee datos físicos.
+- El reintento explícito consulta antes por UUID, legajo y máquina, se ejecuta bajo Web Lock y vuelve a reconciliar si se pierde su ACK. Nunca es automático.
+- La pantalla ofrece revisión del servidor y reenvío manual sólo cuando el estado local permite esa acción (`ENVIO_PREVIO`).
+- Se incorporaron tests de reintento manual, `PENDIENTE`, ACK previo, ausencia de intento, caída de red y recuperación de borradores huérfanos.
+
+### Pruebas diferidas hasta la web de ensayo
+
+Los tests Node y la compilación Vite **sí se ejecutan en CI para evitar integrar código que no compila**. Las pruebas manuales de escritorio con dos pestañas, sesiones reales y cortes de red se efectuarán **después de habilitar un despliegue preview aislado**, nunca directamente sobre la base productiva.
+
+### Bloqueos vigentes
+
+1. No existe una certificación end-to-end en un navegador real de Windows.
+2. `localStorage` no garantiza persistencia corporativa ni protege datos en un equipo compartido sin políticas de privacidad/retención.
+3. No se ha validado en staging con Auth HTTP real la restricción completa por actor.
+4. La migración de Fase 1 no está en SIDES productivo; sin despliegue coordinado backend+frontend el formulario nuevo no podría grabar allí.
+5. Sin backup productivo restaurado y probado no se debe modificar la base principal.
