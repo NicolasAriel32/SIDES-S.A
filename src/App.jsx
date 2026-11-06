@@ -25,7 +25,7 @@ import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorE
 import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
-import { evaluarPreflight, reportePreflightSeguro } from './domain/preflightPuesto.js';
+import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage } from './domain/preflightPuesto.js';
 
 
 /* =================================================================
@@ -1947,6 +1947,33 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [errorPendiente, setErrorPendiente] = useState('');
   const [errorBorrador, setErrorBorrador] = useState('');
   const [estadoRecuperacion, setEstadoRecuperacion] = useState(null);
+  const [escrituraLocalVerificada, setEscrituraLocalVerificada] = useState(false);
+  const [conexionReportada, setConexionReportada] = useState(
+    () => typeof navigator !== 'undefined' && navigator.onLine === true,
+  );
+  // El preflight verifica la capacidad de escribir y limpiar una clave efímera
+  // sin tocar señales, borradores o intentos de ensayos reales.
+  useEffect(() => {
+    const verificarStorage = () => {
+      try {
+        setEscrituraLocalVerificada(verificarEscrituraStorage(
+          window.localStorage, () => window.crypto.randomUUID(),
+        ));
+      } catch {
+        setEscrituraLocalVerificada(false);
+      }
+    };
+    const verificarRedReportada = () => setConexionReportada(navigator.onLine === true);
+    verificarStorage();
+    window.addEventListener('focus', verificarStorage);
+    window.addEventListener('online', verificarRedReportada);
+    window.addEventListener('offline', verificarRedReportada);
+    return () => {
+      window.removeEventListener('focus', verificarStorage);
+      window.removeEventListener('online', verificarRedReportada);
+      window.removeEventListener('offline', verificarRedReportada);
+    };
+  }, []);
   const borradorHidratado = useRef(null);
   const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
   const [revisionEditor, setRevisionEditor] = useState(0);
@@ -2035,7 +2062,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       maquinaId, requestId, pruebaId,
       senales: almacenSenales, borradores: almacenBorradores, intentos: almacenIntentos,
     });
-    setEstadoRecuperacion(estado);
+    setEstadoRecuperacion({ ...estado, maquinaId });
     if (estado.estado !== 'CONFIRMADA_LIMPIA') {
       setErrorBorrador(estado.mensaje || 'La prueba quedó confirmada, pero hay datos locales pendientes de revisar.');
     } else {
@@ -2050,7 +2077,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       consultar: requestId => consultarConfirmacionPrueba(supabase, requestId,
         { legajo: user.legajo, maquina: maquinaId }),
     });
-    setEstadoRecuperacion(estado);
+    setEstadoRecuperacion({ ...estado, maquinaId });
     if (['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estado.estado)) {
       setErrorBorrador(estado.mensaje || 'Hay datos locales que necesitan revisión.');
     } else if (['LIBRE', 'ABIERTA', 'ENVIO_PREVIO', 'CONFIRMADA_LIMPIA'].includes(estado.estado)) {
@@ -2072,15 +2099,15 @@ const VistaOperario = ({ t, user, refresh }) => {
     borradorHidratado.current = senal.requestId;
   };
   const preflightPuesto = evaluarPreflight({
-    estadoLocal: estadoRecuperacion?.estado || (pruebaPendiente ? 'ABIERTA' : 'LIBRE'),
+    // No afirmar que una máquina está libre antes de reconciliar su evidencia.
+    // El estado de otra máquina tampoco autoriza nuevas pruebas en la actual.
+    estadoLocal: estadoRecuperacion?.maquinaId === maquinaInfo?.id
+      ? estadoRecuperacion.estado : 'SIN_VERIFICAR',
     tieneLock: puestoActivo,
     authVerificada: Boolean(user?.authUserId),
-    storageDisponible: (() => {
-      try { return typeof localStorage.length === 'number'; }
-      catch { return false; }
-    })(),
+    storageDisponible: escrituraLocalVerificada,
     navegadorSeguro: typeof window !== 'undefined' && window.isSecureContext === true,
-    online: typeof navigator !== 'undefined' && navigator.onLine === true,
+    online: conexionReportada,
   });
   const diagnosticoSeguro = reportePreflightSeguro(preflightPuesto);
   const copiarDiagnostico = () => {
@@ -2256,6 +2283,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     const m = machinesList.find(x => x.id === id);
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
+    setEstadoRecuperacion(null);
     borradorHidratado.current = null;
     setPruebaPendiente(null);
     setAutoGuardado(false); setErrorPendiente('');
@@ -2598,18 +2626,29 @@ const VistaOperario = ({ t, user, refresh }) => {
           )}
         </div>
       )}
+      {/* UX-POST-001: después del go-live trasladar este recurso a Soporte
+          técnico. Ver docs/BACKLOG_POSTPRODUCCION_UX.md e issue #6. */}
       {maquinaInfo?.id && (
-        <div style={{ border: `1px solid ${t.border}`, borderRadius: 8,
+        <details style={{ border: `1px solid ${t.border}`, borderRadius: 8,
           padding: '10px 12px', marginBottom: 12, fontSize: 12 }}>
-          <strong>Diagnóstico del puesto (sin datos de ensayos): </strong>
-          {diagnosticoSeguro.modo} · {diagnosticoSeguro.estado}
-          {diagnosticoSeguro.bloqueantes.length > 0 &&
-            <span> · Revisar: {diagnosticoSeguro.bloqueantes.join(', ')}</span>}
-          <button type="button" onClick={copiarDiagnostico}
-            style={{ marginLeft: 12, padding: '5px 8px' }}>
-            Copiar diagnóstico seguro
-          </button>
-        </div>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+            Soporte técnico · diagnóstico del puesto (piloto)
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <strong>Estado indicativo: </strong>
+            {diagnosticoSeguro.modo} · {diagnosticoSeguro.estado}
+            {diagnosticoSeguro.bloqueantes.length > 0 &&
+              <span> · Revisar: {diagnosticoSeguro.bloqueantes.join(', ')}</span>}
+            <p style={{ margin: '8px 0', color: t.textMuted }}>
+              La conexión es una señal del navegador, no una verificación del
+              servidor. Este panel no concede permisos ni confirma ensayos.
+            </p>
+            <button type="button" onClick={copiarDiagnostico}
+              style={{ padding: '5px 8px' }}>
+              Copiar diagnóstico seguro
+            </button>
+          </div>
+        </details>
       )}
       {!puestoActivo && maquinaInfo?.id && (
         <div role="alert" style={{ padding: 14, marginBottom: 12,
