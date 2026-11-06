@@ -2233,27 +2233,12 @@ const VistaOperario = ({ t, user, refresh }) => {
     try {
       // Una sola pestaña puede crear la próxima señal de este operario/máquina.
       await conBloqueoDePrueba(navigator.locks, user.legajo, maquinaId, 'inicio-manual', async () => {
-        // Una respuesta perdida y una señal borrada accidentalmente NO deben
-        // crear un nuevo inicio silencioso mientras haya un envío anterior.
-        const anterior = almacenIntentos.leer(maquinaId);
-        if (anterior) {
-          if (anterior.version !== 1 || !anterior.requestId) {
-            setErrorBorrador('Existe un intento de envío ilegible. No se inicia otra prueba.');
-            return;
-          }
-          const confirmacion = await consultarConfirmacionPrueba(supabase, anterior.requestId);
-          if (confirmacion.estado !== 'CONFIRMADA') {
-            setErrorBorrador('Existe un envío anterior sin confirmación suficiente. Revisá el registro antes de iniciar otro.');
-            return;
-          }
-          if (!almacenIntentos.borrarConfirmado(maquinaId, anterior.requestId)) {
-            setErrorBorrador('No se pudo liberar el intento confirmado; revisá el almacenamiento.');
-            return;
-          }
-        }
-        // Nunca pisar un borrador huérfano, aunque no exista su señal inicial.
-        if (almacenBorradores.leer(maquinaId, '__sin_senal__').error) {
-          setErrorBorrador('Hay un borrador local sin señal asociada. Requiere revisión antes de continuar.');
+        // No iniciar otro registro hasta reconciliar TODA la evidencia local:
+        // señal, borrador e intento. No borrar sólo el intento dejando huérfanos.
+        const revision = await revisarEstadoLocal(maquinaId);
+        if (!['LIBRE', 'CONFIRMADA_LIMPIA'].includes(revision.estado)) {
+          setErrorBorrador(revision.mensaje ||
+            'Existe un registro local pendiente. Revisalo antes de iniciar otra prueba.');
           return;
         }
         const numeroPrueba = await recalcularContador(maquinaId, true);
