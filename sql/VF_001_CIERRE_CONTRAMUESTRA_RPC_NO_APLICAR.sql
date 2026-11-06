@@ -48,7 +48,8 @@ BEGIN
   END IF;
   SELECT u.id,u.rol,u.activo INTO v_actor
     FROM public.usuarios u WHERE u.id=auth.uid() AND u.activo=true;
-  IF NOT FOUND OR v_actor.rol NOT IN ('supervisor','admin') THEN
+  IF NOT FOUND OR v_actor.rol IS NULL OR
+     v_actor.rol NOT IN ('supervisor','admin') THEN
     RAISE EXCEPTION 'Rol sin permiso para verificar contramuestra';
   END IF;
 
@@ -104,7 +105,9 @@ BEGIN
     INTO v_prueba FROM public.pruebas
     WHERE id=v_vf.prueba_id FOR SHARE;
   IF NOT FOUND OR v_prueba.anulada IS DISTINCT FROM false
+    OR v_prueba.resultado IS NULL
     OR v_prueba.resultado NOT IN ('OK','RECHAZADO')
+    OR v_prueba.estado_final IS NULL
     OR v_prueba.estado_final IN ('ANULADA','ANULADO','PENDIENTE','CANCELADA')
     OR v_prueba.numero_caja IS NULL OR btrim(v_prueba.numero_caja)=''
     OR v_prueba.numero_lote IS NULL OR btrim(v_prueba.numero_lote)=''
