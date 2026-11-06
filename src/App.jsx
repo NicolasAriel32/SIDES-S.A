@@ -6038,6 +6038,7 @@ export default function App() {
   const esModoPasillo = typeof window !== 'undefined' && window.location.search.includes('pasillo');
 
   const [user, setUser] = useState(null);
+  const authRevision = useRef(0);
   const [hora, setHora] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [operarioTab, setOperarioTab] = useState('produccion');
@@ -6047,32 +6048,44 @@ export default function App() {
   useEffect(() => {
     if (esModoPasillo) return undefined;
     let vigente = true;
-    let revisionAuth = 0;
-    const revisionInicial = revisionAuth;
-    dataService.getCurrentUser()
-      .then(u => {
-        // No sobrescribir un login posterior ni revivir una sesión ya cerrada.
-        if (vigente && revisionInicial === revisionAuth) {
-          setUser(actual => actual || u);
-        }
-      })
-      .catch(() => {
-        if (vigente && revisionInicial === revisionAuth) {
-          setUser(actual => actual || null);
-        }
-      });
+    const revalidar = (inicial = false) => {
+      if (!inicial) {
+        // El foco no debe intentar restaurar perfiles que ya cerraron sesión.
+        try {
+          if (!sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)) return;
+        } catch { return; }
+      }
+      const revisionInicial = authRevision.current;
+      dataService.getCurrentUser()
+        .then(u => {
+          if (!vigente || revisionInicial !== authRevision.current) return;
+          // La restauración inicial no debe pisar un login más reciente.
+          if (inicial) setUser(actual => actual || u);
+          else setUser(u);
+        })
+        .catch(() => {
+          if (!vigente || revisionInicial !== authRevision.current) return;
+          if (inicial) setUser(actual => actual || null);
+          else setUser(null);
+        });
+    };
+    revalidar(true);
 
-    // Cuando Supabase descarta la sesión, ocultar inmediatamente cualquier
-    // pantalla de producción, sin borrar señales ni ensayos pendientes.
     const { data: authListener } = supabase.auth.onAuthStateChange(event => {
       if (event === 'SIGNED_OUT') {
-        revisionAuth++;
+        authRevision.current++;
         limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
         if (vigente) setUser(null);
       }
     });
+    // En una estación compartida, regresar a la pestaña exige releer el
+    // estado activo y rol del servidor; no se conserva la autoridad del cache.
+    const alRecuperarFoco = () => revalidar();
+    window.addEventListener('focus', alRecuperarFoco);
     return () => {
       vigente = false;
+      authRevision.current++;
+      window.removeEventListener('focus', alRecuperarFoco);
       authListener?.subscription?.unsubscribe();
     };
   }, []);
@@ -6094,6 +6107,7 @@ export default function App() {
     } else if (evidencia.total > 0) {
       if (!window.confirm(`Hay ${evidencia.total} registros locales de estanqueidad asociados a tu legajo en este navegador. Se conservarán para recuperarlos en el próximo ingreso. ¿Cerrar sesión?`)) return;
     }
+    authRevision.current++; // Invalida consultas de sesión que aún estén en vuelo.
     // Un log de auditoría complementario no puede impedir el cierre local.
     try {
       await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
@@ -6115,11 +6129,11 @@ export default function App() {
   }
 
   if (!user) {
-    return <PantallaLogin onLogin={setUser} t={t} />;
+    return <PantallaLogin onLogin={u => { authRevision.current++; setUser(u); }} t={t} />;
   }
 
   if (user.forceChange) {
-    return <PantallaCambioPassword user={user} onChanged={setUser} t={t} />;
+    return <PantallaCambioPassword user={user} onChanged={u => { authRevision.current++; setUser(u); }} t={t} />;
   }
 
   const roleTabBtn = (active) => ({
