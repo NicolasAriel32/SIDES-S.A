@@ -27,6 +27,7 @@ import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerr
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
 import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
+import { seleccionarVerificacionesAleatorias } from './domain/seleccionVerificaciones.js';
 
 
 /* =================================================================
@@ -589,8 +590,7 @@ const dataService = {
     }
 
     // 3) Elegir N pruebas al azar e insertarlas
-    const barajadas = [...pruebasTurno].sort(() => Math.random() - 0.5)
-    const elegidas  = barajadas.slice(0, this.CANTIDAD_VERIFICACIONES)
+    const elegidas = seleccionarVerificacionesAleatorias(pruebasTurno, this.CANTIDAD_VERIFICACIONES)
     const turnos    = await this.getTurnos()
     const turnoOrigenId = turnos.find(tn => tn.codigo === codigoAnterior)?.id || null
     const fechaCod  = (fechaLocalAR(new Date()) || '').replace(/-/g, '')
