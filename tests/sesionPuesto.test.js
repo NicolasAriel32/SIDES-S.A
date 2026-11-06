@@ -50,7 +50,7 @@ function fake({profile=perfilInicial,authed=true,loginError=null,authError=null,
  };
  return {supabase,calls,setProfile:x=>{current=x}};
 }
-const params=(f,s)=>({supabase:f.supabase,storage:s,key:KEY,authKey:AUTH_KEY,mapUser});
+const params=(f,s)=>({supabase:f.supabase,storage:s,evidenciaStorage:s,key:KEY,authKey:AUTH_KEY,mapUser});
 test('login exige ID Auth y legajo, no concede un perfil visible de supervisor',async()=>{
  const s=storage(),f=fake();
  const u=await iniciarSesionPuesto({...params(f,s),legajo:' OP1 ',password:'correcta'});
@@ -157,4 +157,22 @@ test('fallo de red al verificar sesión descarta solo token y perfil',async()=>{
  assert.equal(s.getItem(AUTH_KEY),null);
  assert.equal(s.getItem(KEY),null);
  assert.equal(s.getItem('senal_plc_OP1_MAQ-010'),'senal');
+});
+
+test('un segundo legajo no abre sesión en un perfil con borradores de otro operario',async()=>{
+ const s=storage(),f=fake();
+ s.setItem('spc_borrador_v1_OP2_MAQ-010','evidencia');
+ const u=await iniciarSesionPuesto({...params(f,s),legajo:'OP1',password:'x'});
+ assert.equal(u,null);
+ assert.equal(s.getItem(KEY),null);
+ assert.equal(s.getItem('spc_borrador_v1_OP2_MAQ-010'),'evidencia');
+ assert.deepEqual(f.calls.signOut,[{scope:'local'}]);
+});
+test('una evidencia de otro legajo impide restauración aunque Auth siga válido',async()=>{
+ const s=storage(),f=fake();
+ await iniciarSesionPuesto({...params(f,s),legajo:'OP1',password:'x'});
+ s.setItem('spc_intento_v1_OP2_MAQ-010','intento');
+ assert.equal(await restaurarSesionPuesto(params(f,s)),null);
+ assert.equal(s.getItem(KEY),null);
+ assert.equal(s.getItem('spc_intento_v1_OP2_MAQ-010'),'intento');
 });
