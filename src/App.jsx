@@ -6038,6 +6038,7 @@ export default function App() {
   const esModoPasillo = typeof window !== 'undefined' && window.location.search.includes('pasillo');
 
   const [user, setUser] = useState(null);
+  const [cierreEnCurso, setCierreEnCurso] = useState(false);
   const authRevision = useRef(0);
   const cerrandoSesion = useRef(false);
   const [hora, setHora] = useState('');
@@ -6110,6 +6111,7 @@ export default function App() {
       if (!window.confirm(`Hay ${evidencia.total} registros locales de estanqueidad asociados a tu legajo en este navegador. Se conservarán para recuperarlos en el próximo ingreso. ¿Cerrar sesión?`)) return;
     }
     cerrandoSesion.current = true;
+    setCierreEnCurso(true);
     authRevision.current++; // Invalida consultas de sesión que aún estén en vuelo.
     // La pantalla desaparece ANTES de hacer una llamada de red que podría tardar.
     setUser(null);
@@ -6126,6 +6128,8 @@ export default function App() {
     } finally {
       limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
       setUser(null);
+      cerrandoSesion.current = false;
+      setCierreEnCurso(false);
     }
   };
 
@@ -6134,6 +6138,12 @@ export default function App() {
   }
 
   if (!user) {
+    if (cierreEnCurso) {
+      return <div role="status" style={{ minHeight: '100vh', display: 'grid',
+        placeItems: 'center', background: t.bg, color: t.text, fontFamily: 'Manrope' }}>
+        Cerrando sesión de este puesto…
+      </div>;
+    }
     return <PantallaLogin onLogin={u => { cerrandoSesion.current = false; authRevision.current++; setUser(u); }} t={t} />;
   }
 
