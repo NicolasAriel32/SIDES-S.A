@@ -2029,6 +2029,8 @@ const VistaOperario = ({ t, user, refresh }) => {
     setEstadoRecuperacion(estado);
     if (estado.estado !== 'CONFIRMADA_LIMPIA') {
       setErrorBorrador(estado.mensaje || 'La prueba quedó confirmada, pero hay datos locales pendientes de revisar.');
+    } else {
+      setErrorBorrador('');
     }
     return estado;
   };
@@ -2500,6 +2502,20 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
+      {estadoRecuperacion && ['ENVIO_PREVIO', 'INCIERTO', 'INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion.estado) && (
+        <div role="status" style={{ padding: 14, marginBottom: 12, border: `1px solid ${t.warn}`, borderRadius: 8, color: t.text, background: t.warnSoft }}>
+          <strong>{estadoRecuperacion.estado === 'CONFIRMADA_CON_RESIDUOS'
+            ? 'Prueba confirmada; limpieza local pendiente'
+            : estadoRecuperacion.estado === 'ENVIO_PREVIO'
+              ? 'Intento anterior pendiente de revisión' : 'Registro local que requiere atención'}</strong>
+          <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoRecuperacion.mensaje}</p>
+          <button type="button" disabled={!maquinaInfo?.id || submitting}
+            onClick={() => restaurarEstadoDeMaquina(maquinaInfo.id)}
+            style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
+            Consultar servidor y revisar registro local
+          </button>
+        </div>
+      )}
       {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
       {/* CAMBIO v4: Toast de nueva observación */}
       {toastObs && (
