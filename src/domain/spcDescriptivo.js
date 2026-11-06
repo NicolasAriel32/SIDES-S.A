@@ -11,13 +11,15 @@ const idDe = p => {
   const id = p?.supabase_id ?? p?.id;
   return cadena(id) ? id : null;
 };
-const esEnsayo = p => p?.estadoFinal !== 'PENDIENTE' &&
+const esEnsayo = p => !['PENDIENTE', 'ANULADA', 'ANULADO', 'CANCELADA'].includes(p?.estadoFinal) &&
   (p?.estado === 'OK' || p?.estado === 'RECHAZADO');
 
 function categorizarMuestra(p) {
   if (p.aptitudSpc !== aptitudAutorizada) return 'NO_VALIDADO';
   if (!productoDe(p) || p.cabezalesInspeccionados !== CABEZALES_POR_MUESTRA ||
-      !cadena(p.timestamp) || !Number.isFinite(Date.parse(p.timestamp))) {
+      !Number.isInteger(p.cabezalesFalla) ||
+      !cadena(p.timestamp) || !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/i.test(p.timestamp) ||
+      !Number.isFinite(Date.parse(p.timestamp))) {
     return 'INCOMPLETO';
   }
   return validarResultadoEstanqueidad({
