@@ -83,6 +83,7 @@ SET search_path = pg_catalog, public, extensions
 AS $huella$
   SELECT encode(extensions.digest(jsonb_build_object(
     'prueba_id', t.id, 'solicitud', t.spc_request_id,
+    'operario', t.operario_legajo,
     'maquina', t.id_maquina, 'producto', t.codigo_producto,
     'caja', t.numero_caja, 'lote', t.numero_lote,
     'resultado', t.resultado, 'estado_final', t.estado_final,
@@ -123,10 +124,10 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
   SELECT id, legajo, rol INTO actor FROM public.usuarios
     WHERE id=auth.uid() AND activo=true;
-  IF NOT FOUND OR actor.rol <> 'supervisor' THEN
+  IF NOT FOUND OR actor.rol IS DISTINCT FROM 'supervisor' OR actor.legajo IS NULL THEN
     RAISE EXCEPTION 'Solo supervisor de Calidad puede decidir sobre muestras';
   END IF;
-  IF p_prueba_id IS NULL OR p_protocolo_id IS NULL
+  IF p_prueba_id IS NULL OR p_protocolo_id IS NULL OR p_decision IS NULL
      OR p_decision NOT IN ('VALIDAR_DESCRIPTIVA','RECHAZAR','REVOCAR')
      OR p_evidencia_ref IS NULL
      OR p_evidencia_ref !~ '^[A-Za-z0-9_./:-]{6,160}$'
@@ -138,7 +139,7 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Prueba inexistente'; END IF;
   IF ensayo.id_maquina <> 'MAQ-010' OR ensayo.spc_request_id IS NULL
     OR ensayo.spc_origen_evento <> 'MANUAL_NO_OT'
-    OR ensayo.spc_uso_estadistico <> 'NO_VALIDADO'
+    OR ensayo.spc_uso_estadistico IS DISTINCT FROM 'NO_VALIDADO'
     OR ensayo.operario_legajo = actor.legajo
   THEN RAISE EXCEPTION 'Prueba no autorizada para validacion independiente'; END IF;
 
@@ -242,6 +243,83 @@ REVOKE ALL ON FUNCTION public.spc_resolver_validacion_muestra(
   uuid,uuid,text,text,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.spc_resolver_validacion_muestra(
   uuid,uuid,text,text,text) TO authenticated;
+
+
+-- Lectura de la decisión vigente desde el servidor (no desde el navegador).
+-- Se vuelve a verificar huella, protocolo y vigencia. La revocación es
+-- un NUEVO evento: el historial anterior queda disponible a auditoría.
+CREATE OR REPLACE FUNCTION spc_private.obtener_estados_validacion(
+  p_prueba_ids uuid[]
+) RETURNS TABLE (
+  prueba_id uuid, estado text, ensayo_utc timestamptz,
+  validado_en timestamptz, protocolo_codigo text, protocolo_version integer
+) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, spc_private
+AS $obtener$
+DECLARE v_rol text;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  SELECT rol INTO v_rol FROM public.usuarios
+    WHERE id=auth.uid() AND activo=true;
+  IF NOT FOUND OR v_rol IS NULL OR
+     v_rol NOT IN ('supervisor','admin','auditor','inspector') THEN
+    RAISE EXCEPTION 'No autorizado para consultar validaciones';
+  END IF;
+  IF p_prueba_ids IS NULL OR cardinality(p_prueba_ids) > 100
+     OR array_position(p_prueba_ids,NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'Cantidad de identificadores no admitida';
+  END IF;
+  RETURN QUERY
+  WITH ultima AS (
+    SELECT DISTINCT ON (e.prueba_id) e.*
+    FROM spc_private.validaciones_muestra_eventos e
+    WHERE e.prueba_id=ANY(p_prueba_ids)
+    ORDER BY e.prueba_id,e.id DESC
+  )
+  SELECT u.prueba_id,
+      CASE WHEN check_estado.vigente THEN 'VALIDADA_DESCRIPTIVA'
+           ELSE 'NO_VALIDADA' END,
+      CASE WHEN check_estado.vigente THEN u.ensayo_servidor_utc
+           ELSE NULL::timestamptz END,
+      CASE WHEN check_estado.vigente THEN u.fecha_servidor
+           ELSE NULL::timestamptz END,
+      CASE WHEN check_estado.vigente THEN pr.codigo ELSE NULL::text END,
+      CASE WHEN check_estado.vigente THEN pr.version ELSE NULL::integer END
+  FROM ultima u
+  JOIN spc_private.protocolos_muestreo pr ON pr.id=u.protocolo_id
+  CROSS JOIN LATERAL (
+    SELECT (
+      u.decision='VALIDAR_DESCRIPTIVA'
+      AND u.huella_datos=spc_private.huella_muestra(u.prueba_id)
+      AND u.ensayo_servidor_utc IS NOT NULL
+      AND pr.estado='APROBADO'
+      AND pr.aprobado_en<=u.ensayo_servidor_utc
+      AND pr.vigente_desde<=u.ensayo_servidor_utc
+      AND (pr.vigente_hasta IS NULL
+           OR u.ensayo_servidor_utc<pr.vigente_hasta)
+    ) AS vigente
+  ) check_estado;
+END
+$obtener$;
+
+CREATE OR REPLACE FUNCTION public.spc_estados_validacion_muestra(
+  p_prueba_ids uuid[]
+) RETURNS TABLE (
+  prueba_id uuid, estado text, ensayo_utc timestamptz,
+  validado_en timestamptz, protocolo_codigo text, protocolo_version integer
+) LANGUAGE sql SECURITY INVOKER
+SET search_path = pg_catalog, public, spc_private
+AS $read$
+ SELECT * FROM spc_private.obtener_estados_validacion(p_prueba_ids);
+$read$;
+REVOKE ALL ON FUNCTION spc_private.obtener_estados_validacion(uuid[])
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION spc_private.obtener_estados_validacion(uuid[])
+  TO authenticated;
+REVOKE ALL ON FUNCTION public.spc_estados_validacion_muestra(uuid[])
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.spc_estados_validacion_muestra(uuid[])
+  TO authenticated;
 
 -- No se crean protocolos APROBADO por defecto. No existe ruta de
 -- actualización directa de aprobaciones para operadores ni clientes.
