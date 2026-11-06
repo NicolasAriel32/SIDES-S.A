@@ -24,9 +24,10 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
   distribución física de cabezales con y sin defectos según registro.
 - La cantidad de selecciones sigue en **2** por conservar el comportamiento
   existente; Planta no fijó una cantidad nueva.
-- La selección server-side debe partir de pruebas digitales elegibles del
-  turno anterior, persistir identificadores de prueba y contramuestra y
-  registrar la comprobación física de forma trazable e idempotente.
+- La selección server-side parte de pruebas digitales no anuladas del
+  turno anterior y asigna identificadores de prueba al encargado autenticado.
+  La comprobación física queda trazada por VF-001 (borrador de cierre).
+  La asignación VF-002 ya está escrita como contrato SQL **no ejecutado**.
 
 ## Criterios físicos confirmados por Planta
 
@@ -71,69 +72,72 @@ de forma segura (sin escribir resultado), por lo que **NO debe desplegarse**.
 Aún falta probar autorizaciones por rol, interoperabilidad, concurrencia y
 respuesta ante corte de red.
 
-## Implementación existente que se preserva
+## Implementación tras VF-002 (todavía SIN DESPLIEGUE)
 
-- `src/App.jsx`: `asegurarVerificacionesTurnoAnterior` selecciona pruebas del
-  turno anterior y asigna verificaciones al responsable que ingresa.
-- Cantidad actualmente codificada = **2** verificaciones por ingreso/turno;
-  Planta **no confirmó en esta conversación** si esa cantidad debe ser 1 o 2.
-  Se conserva el valor existente en esta entrega.
-- Formulario `ModalVerificacionFisica` pide comprobar contramuestras en almacén,
-  cantidad y coincidencia de etiqueta/lote/caja; puede emitir `DISCREPANCIA`.
-  Planta confirmó existencia física, exactamente 20, coincidencia
-  caja/lote y distribución con/sin defectos. La corrección del formulario
-  se realizó en la rama sin desplegar.
-- No se vuelve a medir ni se exige aprobar el resultado del ensayo para
-  registrarlo o incluirlo en conteos descriptivos de pruebas registradas.
-- Este control nunca debe escribir `spc_uso_estadistico='VALIDADO'` ni
-  interpretar un registro manual como evento OT certificado.
+- `src/App.jsx`: `asegurarVerificacionesTurnoAnterior` **ya no**
+  consulta ni inserta pruebas desde el navegador. Invoca el nuevo
+  `src/api/asignacionVerificaciones.js`, que llama a la RPC del servidor
+  **sin argumentos**; hora, responsable y cantidad son inyectados por el DB.
+- `sql/VF_002_ASIGNACION_ATOMICA_NO_APLICAR.sql` fija el turno entrante
+  según reloj PostgreSQL + America/Argentina/Buenos_Aires, toma su turno
+  anterior (8 h), verifica rol activo supervisor/admin y selecciona
+  **2** pruebas sin reposición con `ORDER BY random() LIMIT 2`.
+- Serializa las peticiones por turno con `pg_advisory_xact_lock` y
+  `SELECT ... FOR UPDATE`; una tabla ledger tiene PK por turno entrante.
+  Un índice **UNIQUE(prueba_id)** impide duplicar verificaciones para
+  la misma prueba, aun cuando el sorteo elija candidatas diferentes.
+- Si dos sesiones compiten, una asigna y otra obtiene `YA_ASIGNADA` o
+  `ASIGNADA_A_OTRO` sin crear filas adicionales. Los turnos con
+  verificaciones antiguas producen `LEGADO_EXISTENTE` y no se duplican.
+- Se almacena `SIN_PRUEBAS` cuando no existen candidatas, para mantener
+  idempotencia de la selección por turno y no hacer sorteos tardíos por
+  reintento. Este comportamiento debe evaluarse con datos offline reales.
+- Al aplicar la migración, se **REVOCA INSERT directo de authenticated**
+  para que clientes antiguos no puedan saltarse el lock; exige ventana
+  coordinada e inventario de clientes, no publicar frontend antes.
+- No se cambió el número de verificaciones ni las condiciones de
+  elegibilidad anteriores (`anulada IS FALSE`, turno anterior).
+- `getVerificacionesPendientes` ya indica el error de lectura en vez
+  de tratarlo como una lista vacía. La UI ahora informa también fallos
+  de asignación y los casos `ASIGNADA_A_OTRO` / `LEGADO_EXISTENTE`.
+- El formulario `ModalVerificacionFisica` continúa comprobando
+  contramuestra física, 20 cabezales, caja, lote y distribución de
+  defectuosos/no defectuosos; VF-001 sigue siendo migración separada.
 
-## Corrección técnica incorporada
+## Riesgos que bloquean todavía el uso en planta
 
-- Nuevo `src/domain/seleccionVerificaciones.js`: muestreo sin reposición por
-  Fisher–Yates parcial, con entradas verificadas.
-- Reemplaza el sesgado `sort(() => Math.random() - 0.5)` sin alterar la
-  cantidad de verificaciones, las condiciones de elegibilidad existentes,
-  los destinatarios, el formulario ni los estados almacenados.
-- `tests/seleccionVerificaciones.test.js`: no duplicación, conservación de
-  lista original, ausencias, cantidad insuficiente y fuentes inválidas.
-- **Advertencia:** selección al azar en el navegador NO asegura aleatoriedad
-  auditable ni impide manipulación por un usuario privilegiado.
+1. **Staging incompleto:** `public.verificaciones_fisicas` falta en
+   SIDES-SPC-STAGING; sin ella no puede probarse VF-001/VF-002.
+2. **Integración SQL real:** las pruebas CI sólo comprueban el contrato
+   de cliente, la presencia de invariantes SQL y la compilación.
+   Falta correr la migración en base aislada y realizar concurrencia
+   real con dos conexiones (dos responsables, y dos pestañas del mismo).
+3. **Hora de origen:** `pruebas.created_at` es timestamp sin zona y
+   el script interpreta valores como UTC, coherente con la configuración
+   inspeccionada. No hay prueba de procedencia de cada registro histórico.
+4. **Roles:** encargado de sala actualmente está modelado como
+   `supervisor`; confirmar equivalencia en la configuración real.
+   SQL usa permisos `supervisor/admin`, igual que el flujo existente.
+5. **Compatibilidad/rollback:** revocar INSERT directo y habilitar
+   RPC de cierre requieren inventario de clientes legados, backups,
+   rollback y despliegue coordinado. Ningún cambio de esquema aplicado.
+6. **Seguridad:** falta QA Auth negativa y restauración aislada.
+   No es suficiente inspeccionar políticas RLS.
+7. **Turno sin candidatos:** la decisión persistida `SIN_PRUEBAS`
+   impide un nuevo sorteo en el mismo turno si llegan registros offline
+   después; es una elección técnica conservadora que requiere prueba.
 
-## Hallazgos no resueltos (bloqueo al piloto)
+## Siguiente fase verificada
 
-1. **Falta tabla en STAGING:** `public.verificaciones_fisicas` existe en
-   la base SIDES S.A productiva, pero NO aparece en SIDES-SPC-STAGING. No
-   se puede completar QA end-to-end de este flujo en staging actualmente.
-2. **Carrera entre dos sesiones:** el frontend consulta si existen
-   verificaciones y luego las inserta, sin una operación transaccional que
-   reserve el turno. Puede generar asignaciones duplicadas.
-3. **Idempotencia incompleta:** detectar una verificación previa por
-   cualquier `prueba_id` no equivale a comprobar la existencia de la
-   asignación para exactamente el turno/encargado previsto.
-4. **Tiempos:** el filtro usa `created_at`, timestamp sin zona horaria
-   explícita, comparado con cadenas ISO UTC; no hay contrato verificado para
-   todos los registros históricos.
-5. **Cobertura:** lectura de pruebas sin paginación declarada; si supera
-   la configuración de límite de filas de la API, no se elige entre todas.
-6. **Errores silenciosos:** si falla `getVerificacionesPendientes` devuelve
-   `[]`, que en algunos lugares se interpreta como «no hay verificaciones».
-7. **Políticas y roles:** confirmar que *encargado de sala* corresponde
-   al rol de aplicación `supervisor` o a otro. En producción hay políticas
-   `vf_insert/vf_select/vf_update`; en staging la tabla no existe.
-   Falta prueba negativa con sesiones Auth de ensayo.
+Preparar esquema de staging y pruebas con sesiones reales:
+sesiones simultáneas, reintento de red, diferencias entre turnos,
+fuente vacía, turnos que cruzan medianoche, RLS/Auth por rol,
+verificaciones legadas y datos sin zona horaria. Registrar evidencia
+antes de activar SQL y desplegar. Ver `docs/VF-002_ASIGNACION_TRANSACCIONAL.md`.
 
-## Recomendación de implementación siguiente
-
-Antes de operar en planta, diseñar una selección **server-side** idempotente,
-atómica, autorizada, por ventana de turno y responsable, sin depender de
-`Math.random` del cliente. Preparar estructura de staging con procedimiento
-revisado y ejecutar QA en Windows, dejando producción sin modificaciones.
-
-**Requiere confirmación antes de cambiar negocios:** cantidad de controles
-(1 o 2) y si el cargo encargado de sala corresponde al rol de aplicación
-`supervisor`. La verificación de los 20 cabezales, la identificación
-y la distribución física está confirmada.
+**Pendiente de confirmación operativa:** número definitivo de controles
+(se mantienen dos existentes) y correspondencia entre encargado y
+rol supervisor. No agregar aprobación humana de los ensayos.
 
 ## Decisiones explícitamente descartadas
 
