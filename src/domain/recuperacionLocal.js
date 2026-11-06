@@ -73,14 +73,29 @@ export function limpiarTrasConfirmacion({ maquinaId, requestId, senales, borrado
   return resultado('CONFIRMADA_LIMPIA', null, { pruebaId });
 }
 
-export async function recuperarEstadoLocal({ maquinaId, senales, borradores, intentos, consultar }) {
+export async function recuperarEstadoLocal({
+  maquinaId, senales, borradores, intentos, consultar, puedeModificar = () => true,
+}) {
   const actual = inspeccionarRegistrosLocales({ maquinaId, senales, borradores, intentos });
   if (actual.estado !== 'ENVIO_PREVIO' && actual.estado !== 'HUERFANO') return actual;
+  // La consulta remota puede tardar: un usuario podría cambiar de máquina y
+  // liberar el Web Lock. Nunca limpiar evidencia con un permiso ya revocado.
+  const vigente = () => {
+    try { return puedeModificar() === true; } catch { return false; }
+  };
+  if (!vigente()) return resultado('INCIERTO',
+    'Se perdió el permiso de máquina; no se consultó ni modificó la evidencia.',
+    { requestId: actual.requestId });
   let remoto;
   try {
     remoto = await consultar(actual.requestId);
   } catch {
     return resultado('INCIERTO', 'No se pudo comprobar la prueba en el servidor; conservá los datos.',
+      { requestId: actual.requestId });
+  }
+  if (!vigente()) {
+    return resultado('INCIERTO',
+      'La máquina cambió durante la consulta; la evidencia local se conserva.',
       { requestId: actual.requestId });
   }
   if (remoto?.estado === 'CONFIRMADA' && remoto.pruebaId) {
