@@ -24,3 +24,17 @@ test('lectura válida sin fila permite revisión del reintento',async()=>{
  const client={from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:null,error:null})})})})};
  assert.equal((await consultarConfirmacionPrueba(client,'uuid')).estado,'NO_ENCONTRADA');
 });
+
+test('reconciliación por UUID filtra también legajo y máquina cuando se conocen',async()=>{
+ const filtros=[];
+ const query={eq(campo,valor){filtros.push([campo,valor]);return this},
+   maybeSingle:async()=>({data:{id:'p-1',numero_secuencial:42},error:null})};
+ const client={from:(tabla)=>{assert.equal(tabla,'pruebas');return {select:()=>query}}};
+ const r=await consultarConfirmacionPrueba(client,'uuid-x',{legajo:'OP1',maquina:'MAQ-010'});
+ assert.equal(r.estado,'CONFIRMADA');
+ assert.deepEqual(filtros,[['spc_request_id','uuid-x'],['operario_legajo','OP1'],['id_maquina','MAQ-010']]);
+});
+test('identidad incompleta no puede autorizar confirmación',async()=>{
+ const client={from:()=>({select:()=>({eq(){return this},maybeSingle:async()=>({data:null,error:null})})})};
+ assert.equal((await consultarConfirmacionPrueba(client,'uuid',{legajo:'OP1'})).estado,'INCIERTO');
+});
