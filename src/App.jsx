@@ -22,7 +22,8 @@ import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuale
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
 import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
-import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
+import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
+import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 
 
@@ -327,121 +328,30 @@ const dataService = {
   // LOGIN — usa Supabase Auth (bcrypt server-side) con email interno {legajo}@sides.internal
   // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
-    const legajoSolicitado = String(legajo || '').trim();
-    if (!legajoSolicitado || !password) return null;
-
-    let authData;
-    try {
-      const respuesta = await supabase.auth.signInWithPassword({
-        email: `${legajoSolicitado}@sides.internal`, password,
-      });
-      if (respuesta.error || !respuesta.data?.user?.id) return null;
-      authData = respuesta.data;
-    } catch {
-      return null;
-    }
-
-    // La identidad la determina Auth, NO un legajo que el cliente puede escribir.
-    try {
-      const { data, error } = await supabase
-        .from('usuarios').select('*')
-        .eq('id', authData.user.id)
-        .eq('legajo', legajoSolicitado)
-        .maybeSingle();
-      if (error) throw error;
-      const verificacion = verificarPerfilAutenticado({
-        perfil: data, authUser: authData.user, legajoSolicitado,
-      });
-      if (!verificacion.ok) throw new Error(verificacion.motivo);
-      const user = { ...mapUserFromDb(data), authUserId: authData.user.id };
-      // Si el almacenamiento no funciona, no se habilita la sesión.
-      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
-      return user;
-    } catch {
-      // Una autenticación válida no autoriza usar cualquier perfil accesible por RLS.
-      try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* fail closed */ }
-      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
-      return null;
-    }
+    return iniciarSesionPuesto({
+      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      mapUser: mapUserFromDb, legajo, password,
+    });
   },
 
   async logout() {
-    // El perfil se borra aunque Auth no responda; la evidencia SPC no se toca.
-    try {
-      const { error } = await supabase.auth.signOut({ scope: 'local' })
-      if (error) throw error
-    } finally {
-      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
-    }
+    return cerrarSesionPuesto({
+      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+    });
   },
 
   async getCurrentUser() {
-    // Primero verifica Auth en el servidor; después relee el perfil vigente.
-    // Los roles y estado guardados en sessionStorage nunca se aceptan como autoridad.
-    try {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData?.user?.id) throw new Error('AUTH_NO_VERIFICABLE');
-
-      const local = verificarSesionLocal({
-        storage: sessionStorage, claveUsuario: STORAGE_KEYS.CURRENT_USER,
-        authUser: authData.user,
-      });
-      if (!local.ok) throw new Error(local.motivo);
-
-      const { data: perfil, error: errorPerfil } = await supabase
-        .from('usuarios').select('*')
-        .eq('id', authData.user.id)
-        .eq('legajo', local.usuario.legajo)
-        .maybeSingle();
-      if (errorPerfil) throw errorPerfil;
-      const verificacion = verificarPerfilAutenticado({
-        perfil, authUser: authData.user, legajoSolicitado: local.usuario.legajo,
-      });
-      if (!verificacion.ok) throw new Error(verificacion.motivo);
-      const user = { ...mapUserFromDb(perfil), authUserId: authData.user.id };
-      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
-      return user;
-    } catch {
-      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
-      return null;
-    }
+    return restaurarSesionPuesto({
+      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      mapUser: mapUserFromDb,
+    });
   },
 
   async changePassword(legajo, newPass) {
-    // Si cambió el usuario autenticado, jamás alterar el perfil de otro operario.
-    const current = await this.getCurrentUser();
-    if (!current?.authUserId || current.legajo !== legajo) return null;
-
-    try {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || authData?.user?.id !== current.authUserId) return null;
-
-      const { error: passwordError } = await supabase.auth.updateUser({ password: newPass });
-      if (passwordError) return null;
-
-      // El cambio en Auth y la marca en DB no forman una transacción única.
-      // Ante falla de metadata, nunca declarar el cambio completo.
-      const { error: metadataError } = await supabase.rpc('marcar_password_cambiada');
-      if (metadataError) return null;
-
-      const { data: perfil, error: errorPerfil } = await supabase
-        .from('usuarios').select('*')
-        .eq('id', current.authUserId)
-        .eq('legajo', current.legajo)
-        .maybeSingle();
-      if (errorPerfil) return null;
-      const verificacion = verificarPerfilAutenticado({
-        perfil, authUser: authData.user, legajoSolicitado: current.legajo,
-      });
-      if (!verificacion.ok) return null;
-
-      // Fix fase 4: no perder authUserId tras el cambio de contraseña.
-      const updatedUser = { ...mapUserFromDb(perfil), authUserId: current.authUserId };
-      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser));
-      return updatedUser;
-    } catch {
-      return null;
-    }
+    return cambiarPasswordPuesto({
+      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      mapUser: mapUserFromDb, legajo, newPass,
+    });
   },
 
   // ===== MÁQUINAS =====
