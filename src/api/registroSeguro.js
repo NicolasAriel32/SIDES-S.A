@@ -21,7 +21,7 @@ export async function guardarPruebaSegura({ supabase, test, storage, lockManager
     });
 
     if (intento.yaExistia) {
-      const anterior = await consultarConfirmacionPrueba(supabase, test.requestId);
+      const anterior = await consultarConfirmacionPrueba(supabase, test.requestId, { legajo: test.legajoOperario, maquina: test.maquina });
       if (anterior.estado === 'CONFIRMADA') return confirmada(anterior);
     }
 
@@ -38,7 +38,7 @@ export async function guardarPruebaSegura({ supabase, test, storage, lockManager
 
     if (!envio.error && envio.data?.prueba_id) return envio;
 
-    const consulta = await consultarConfirmacionPrueba(supabase, test.requestId);
+    const consulta = await consultarConfirmacionPrueba(supabase, test.requestId, { legajo: test.legajoOperario, maquina: test.maquina });
     if (consulta.estado === 'CONFIRMADA') return confirmada(consulta);
 
     return {
