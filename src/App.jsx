@@ -1588,19 +1588,31 @@ const PantallaLogin = ({ onLogin, t }) => {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
-    if (!legajo || !password) {
+    if (loading) return;
+    if (!legajo.trim() || !password) {
       setError('Completá ambos campos');
       return;
     }
     setLoading(true);
     setError('');
-    const user = await dataService.login(legajo, password);
-    setLoading(false);
-    if (user) {
-      await dataService.logEvent({ accion: 'LOGIN', usuario: `${user.nombre} ${user.apellido}`, desc: `Inicio de sesión · rol ${user.rol}` });
-      onLogin(user);
-    } else {
-      setError('Legajo o contraseña incorrectos');
+    try {
+      const usuario = await dataService.login(legajo, password);
+      if (!usuario) {
+        setError('No se pudo validar la cuenta o su perfil activo.');
+        return;
+      }
+      // El evento complementario no debe dejar una sesión válida sin UI.
+      try {
+        await dataService.logEvent({
+          accion: 'LOGIN', usuario: `${usuario.nombre} ${usuario.apellido}`,
+          desc: `Inicio de sesión · rol ${usuario.rol}`,
+        });
+      } catch { /* registro principal de Auth ya validado */ }
+      onLogin(usuario);
+    } catch {
+      setError('No se pudo completar la autenticación. Revisá tu conexión.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1678,10 +1690,27 @@ const PantallaCambioPassword = ({ user, onChanged, t }) => {
   const handleSubmit = async () => {
     if (pass1.length < 12) { setError('La contraseña debe tener al menos 12 caracteres'); return; }
     if (pass1 !== pass2) { setError('Las contraseñas no coinciden'); return; }
-    if (pass1 === user.password) { setError('No podés usar la misma contraseña'); return; }
-    const updated = await dataService.changePassword(user.legajo, pass1);
-    await dataService.logEvent({ accion: 'UPDATE', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cambio de contraseña' });
-    onChanged(updated);
+    // La contraseña previa no se almacena en el objeto de usuario.
+    setError('');
+    try {
+      const updated = await dataService.changePassword(user.legajo, pass1);
+      if (!updated?.authUserId) {
+        setError('No se confirmó el cambio completo. La contraseña de Auth podría haberse actualizado; si es necesario, volvé a iniciar sesión con la nueva.');
+        return;
+      }
+      try {
+        await dataService.logEvent({
+          accion: 'UPDATE', usuario: `${user.nombre} ${user.apellido}`,
+          desc: 'Cambio de contraseña',
+        });
+      } catch { /* El log auxiliar no impide completar el cambio validado. */ }
+      onChanged(updated);
+    } catch {
+      setError('No se pudo confirmar el cambio de contraseña.');
+    } finally {
+      setPass1('');
+      setPass2('');
+    }
   };
 
   return (
