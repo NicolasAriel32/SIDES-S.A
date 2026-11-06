@@ -3,8 +3,8 @@ name: SPC-001 · validación de rama
 on:
   pull_request:
     paths:
-      - 'src/App.jsx'
-      - 'src/domain/estanqueidad.js'
+      # Cualquier cambio en API, dominios o componentes debe pasar CI.
+      - 'src/**'
       - 'tests/**/*.test.js'
       - 'sql/spc_001_registrar_prueba_atomica_BORRADOR_NO_APLICAR.sql'
       - 'package.json'
