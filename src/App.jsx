@@ -2042,7 +2042,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     setEstadoRecuperacion(estado);
     if (['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estado.estado)) {
       setErrorBorrador(estado.mensaje || 'Hay datos locales que necesitan revisión.');
-    } else if (estado.estado === 'LIBRE' || estado.estado === 'CONFIRMADA_LIMPIA') {
+    } else if (['LIBRE', 'ABIERTA', 'ENVIO_PREVIO', 'CONFIRMADA_LIMPIA'].includes(estado.estado)) {
       setErrorBorrador('');
     }
     return estado;
@@ -2057,7 +2057,6 @@ const VistaOperario = ({ t, user, refresh }) => {
       setCabezalesFalla(borrador.cabezalesFalla || 0);
       setCodigoProducto(borrador.codigoProducto || '');
       setCaja(borrador.caja || ''); setLote(borrador.lote || ''); setObs(borrador.obs || '');
-      setErrorBorrador('');
     }
     borradorHidratado.current = senal.requestId;
   };
@@ -2077,7 +2076,12 @@ const VistaOperario = ({ t, user, refresh }) => {
     const { senal: guardada, error } = almacenSenales.leer(maquinaId);
     if (error) { setErrorPendiente(error); return null; }
     if (!guardada || guardada.requestId) return guardada;
-    // No inventar un UUID para una señal ajena o con timestamp malformado.
+    // No migrar si hay un borrador o intento con identidad independiente.
+    const otro = almacenBorradores.inspeccionar(maquinaId);
+    if (otro.error || otro.requestId || almacenIntentos.leer(maquinaId)) {
+      setErrorBorrador('La señal antigua carece de UUID y hay otros registros locales. Requiere revisión.');
+      return null;
+    }
     if (evaluarSenalManual(guardada, maquinaId).estado === 'INVALIDA') {
       setErrorPendiente('La señal local requiere revisión manual; no se eliminó.');
       return null;
@@ -2133,6 +2137,57 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
   };
 
+  // Restauración coherente para la entrada, el cambio de máquina y la revisión.
+  const restaurarEstadoDeMaquina = async maquinaId => {
+    if (!maquinaId) return;
+    recuperarSenalConId(maquinaId); // Migración conservadora de una señal antigua.
+    const revision = await revisarEstadoLocal(maquinaId);
+    if (revision.estado === 'CONFIRMADA_LIMPIA') {
+      borradorHidratado.current = null;
+      setPruebaPendiente(null);
+      await recalcularContador(maquinaId);
+      refresh();
+      return;
+    }
+    if (['INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(revision.estado)) {
+      setPruebaPendiente(null); // Nunca editar ni sobreescribir registros inconsistentes.
+      return;
+    }
+    const { senal: guardada, error } = almacenSenales.leer(maquinaId);
+    if (error) { setErrorBorrador(error); setPruebaPendiente(null); return; }
+    if (!guardada) { setPruebaPendiente(null); return; }
+    const evaluacion = evaluarSenalManual(guardada, maquinaId);
+    if (evaluacion.estado === 'INVALIDA') {
+      setErrorPendiente(evaluacion.motivo);
+      setPruebaPendiente(null);
+      return;
+    }
+    if (revision.estado === 'ENVIO_PREVIO' || revision.estado === 'INCIERTO') {
+      restaurarBorrador(guardada, maquinaId);
+      setPruebaPendiente(guardada);
+      setAutoGuardado(true); // Un envío existente no se convierte en PENDIENTE.
+      return;
+    }
+    if (evaluacion.estado === 'VENCIDA') {
+      const registrado = await registrarPendienteAuto(guardada, maquinaId);
+      if (registrado) {
+        borradorHidratado.current = null;
+        setPruebaPendiente(null);
+        await recalcularContador(maquinaId);
+        refresh();
+      } else {
+        restaurarBorrador(guardada, maquinaId);
+        setPruebaPendiente(guardada);
+        setAutoGuardado(true);
+        setErrorPendiente('El registro no se cerró; la señal y los datos locales permanecen guardados.');
+      }
+      return;
+    }
+    restaurarBorrador(guardada, maquinaId);
+    setPruebaPendiente(guardada);
+    setAutoGuardado(false);
+  };
+
   useEffect(() => {
     const init = async () => {
       const machines = await dataService.getMachines();
@@ -2151,37 +2206,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       // Recalcular contador y autocompletar lote/producto con último registro de la máquina
       if (m?.id) await recalcularContador(m.id, true);
 
-      // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
-      // PENDIENTE automáticamente y el operario espera la próxima señal.
-      const guardada = m?.id ? recuperarSenalConId(m.id) : null;
-      if (guardada) {
-        const evaluacion = evaluarSenalManual(guardada, m.id);
-        if (evaluacion.estado === 'INVALIDA') {
-          setErrorPendiente(evaluacion.motivo);
-          setPruebaPendiente(null);
-          return;
-        }
-        if (evaluacion.estado === 'VENCIDA') {
-          const registrado = await registrarPendienteAuto(guardada, m.id);
-          if (registrado) {
-            borradorHidratado.current = null;
-            setPruebaPendiente(null);
-            if (m?.id) await recalcularContador(m.id);
-            refresh();
-          } else {
-            restaurarBorrador(guardada, m.id);
-            setPruebaPendiente(guardada);
-            setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
-            setAutoGuardado(true);
-          }
-        } else {
-          restaurarBorrador(guardada, m.id);
-          setPruebaPendiente(guardada);   // el reloj sigue desde la señal original
-        }
-        return;
-      }
-      // pruebaPendiente queda en null hasta que el operario presione el botón
-      setPruebaPendiente(null);
+      await restaurarEstadoDeMaquina(m?.id);
     };
     init();
   }, [user]);
@@ -2198,23 +2223,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
     await recalcularContador(m.id, true);
-    // restaurar señal persistida de esa máquina (si existe)
-    const guardada = recuperarSenalConId(m.id);
-    if (guardada) {
-      const evaluacion = evaluarSenalManual(guardada, m.id);
-      if (evaluacion.estado === 'INVALIDA') {
-        setErrorPendiente(evaluacion.motivo);
-        return;
-      }
-      if (evaluacion.estado === 'VENCIDA') {
-        if (!await registrarPendienteAuto(guardada, m.id)) {
-          restaurarBorrador(guardada, m.id);
-          setPruebaPendiente(guardada);
-          setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
-          setAutoGuardado(true);
-        }
-      } else { restaurarBorrador(guardada, m.id); setPruebaPendiente(guardada); }
-    }
+    await restaurarEstadoDeMaquina(m.id);
   };
 
   // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
