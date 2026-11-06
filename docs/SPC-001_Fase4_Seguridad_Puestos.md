@@ -35,14 +35,14 @@
 
 ### Pasada 2: seguridad y concurrencia de estación compartida
 - Extraído `src/api/sesionPuesto.js` para probar las rutas de login, recarga, password y logout con dobles de Auth y PostgREST; `src/domain/seguridadPuesto.js` define el contrato de perfil/UID.
-- En logout, se descartan el perfil de UI y el token persistido local; se emplea la clave de sesión predeterminada por el proyecto Supabase para no dejar una sesión legada sin limpiar.
+- En logout, se descartan el perfil de UI y el token persistido local; se emplea la clave de sesión predeterminada por el proyecto Supabase para no dejar una sesión legada sin limpiar. Si falla el cierre remoto, se recarga el navegador para descartar también el estado de Auth que pudiera quedar en memoria.
 - La eliminación local del token **no revoca por sí sola los access tokens existentes**, que siguen válidos hasta su vencimiento en servidor. El resultado remoto sigue siendo un riesgo que requiere validación en navegador.
 - La UI escucha `SIGNED_OUT` y se oculta; el regreso al foco revalida el perfil contra Supabase. Una revisión de sesión tardía no puede reabrir una identidad después de logout o de otro login.
 - Durante el logout se oculta la UI inmediatamente y el siguiente login queda bloqueado hasta completar el cierre. La evidencia de pruebas continúa intacta.
 - Se mantienen las advertencias antes de cerrar sesión si hay señales, borradores o intentos locales pendientes; no se realiza borrado general de `localStorage`.
 
 ### Evidencia automatizada
-- GitHub Actions: `npm test` **99 pruebas aprobadas, 0 fallos** y `npm run build` completo sobre la rama de Fase 4, ejecución [42161000493](https://github.com/NicolasAriel32/SIDES-S.A/actions/runs/42161000493).
+- GitHub Actions: `npm test` **99 pruebas aprobadas, 0 fallos** y `npm run build` completo sobre la rama de Fase 4, ejecución [42161206752](https://github.com/NicolasAriel32/SIDES-S.A/actions/runs/42161206752).
 - Las pruebas con dobles verifican UID, legajo, rol, estado activo, almacenamiento denegado, revocación lógica en recarga, cambio de contraseña, cierre offline y preservación de trazabilidad.
 - Estas ejecuciones **no sustituyen** pruebas E2E reales de Chrome/Edge, Auth HTTP, múltiples pestañas ni corte físico de conexión.
 
@@ -56,3 +56,8 @@
 
 ## Decisión
 **No fusionar Fase 4 a `main` todavía.** Completar revisión y ejecutar QA de navegador al preparar un preview aislado; la compilación y los tests de CI no equivalen a certificación de planta.
+
+### Validaciones adicionales de PR
+- El diff de PR #4 contiene sólo cambios frontend, módulos JavaScript, pruebas y documentación (sin ficheros SQL ni claves de producción).
+- Se comprobó que el commit de `main` sigue en `bc45f089d6ebb404bbab7b5e4102378116378107` y que el PR #4 permanece sin fusionar.
+- Riesgo a validar en preview: el BroadcastChannel de Auth podría generar eventos entre pestañas aunque las sesiones estén en `sessionStorage`. La prueba E2E debe verificar que el logout de una pestaña no exponga ni modifique el usuario de otra.
