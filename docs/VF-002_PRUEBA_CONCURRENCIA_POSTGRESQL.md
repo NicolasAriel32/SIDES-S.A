@@ -54,3 +54,15 @@ la RPC real ni ausencia de todos los deadlocks/carreras.
 - Migración real VF-001/VF-002: **NO APLICADA**.
 - Concurrencia end-to-end: **PENDIENTE**.
 - Producción: **NO-GO**.
+
+## Pruebas de unicidad y rollback
+
+- Intento de insertar una segunda selección con el mismo ID de prueba:
+  PostgreSQL produjo `unique_violation` y se capturó como resultado
+  esperado. Conteo posterior de la prueba: **1**.
+- En una subtransacción se insertó un ledger nuevo y se provocó una
+  violación de unicidad al insertar una selección. El bloque de excepción
+  revirtió ambos pasos: **0** ledgers parciales y **0** selecciones
+  parciales para `VF-LAB-20261106-ROLLBACK`.
+- Estas pruebas usan la estructura aislada `vf_concurrency_lab` y no
+  sustituyen las pruebas de VF-002 definitiva con datos de staging.
