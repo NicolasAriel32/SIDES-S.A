@@ -329,31 +329,31 @@ const dataService = {
   // ISO 27001: contraseña nunca viaja en texto plano ni se compara en cliente.
   async login(legajo, password) {
     return iniciarSesionPuesto({
-      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
-      authKey: AUTH_STORAGE_KEY,
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb, legajo, password,
     });
   },
 
   async logout() {
     return cerrarSesionPuesto({
-      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
-      authKey: AUTH_STORAGE_KEY,
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
     });
   },
 
   async getCurrentUser() {
     return restaurarSesionPuesto({
-      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
-      authKey: AUTH_STORAGE_KEY,
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb,
     });
   },
 
   async changePassword(legajo, newPass) {
     return cambiarPasswordPuesto({
-      supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
-      authKey: AUTH_STORAGE_KEY,
+      supabase, storage: sessionStorage, evidenciaStorage: localStorage,
+      key: STORAGE_KEYS.CURRENT_USER, authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb, legajo, newPass,
     });
   },
@@ -2558,14 +2558,14 @@ const VistaOperario = ({ t, user, refresh }) => {
             : estadoRecuperacion.estado === 'ENVIO_PREVIO'
               ? 'Intento anterior pendiente de revisión' : 'Registro local que requiere atención'}</strong>
           <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoRecuperacion.mensaje}</p>
-          <button type="button" disabled={!maquinaInfo?.id || submitting}
+          <button type="button" disabled={!puestoActivo || !maquinaInfo?.id || submitting}
             onClick={() => restaurarEstadoDeMaquina(maquinaInfo.id)}
             style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
             Consultar servidor y revisar registro local
           </button>
           {estadoRecuperacion.estado === 'ENVIO_PREVIO' && (
             <button type="button"
-              disabled={submitting || (Boolean(pruebaPendiente) && !editorActivo)}
+              disabled={!puestoActivo || submitting || (Boolean(pruebaPendiente) && !editorActivo)}
               onClick={reintentarEnvioPrevio}
               style={{ padding: '8px 12px', marginLeft: 8, borderRadius: 6,
                 border: `1px solid ${t.border}`, background: t.surfaceHi,
@@ -2693,7 +2693,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             En MAQ-010 el aviso real se muestra en la HMI Kinco; para otras máquinas seguí el procedimiento industrial vigente.
             Este botón inicia un registro manual: no recibe datos del PLC ni verifica la hora del aviso.
           </p>
-          <button onClick={generarSenalPLC} disabled={!maquinaInfo?.id} style={{
+          <button onClick={generarSenalPLC} disabled={!puestoActivo || !maquinaInfo?.id} style={{
             marginTop: 24, padding: '14px 28px',
             background: maquinaInfo?.id ? t.accent : t.surfaceHi,
             color: maquinaInfo?.id ? t.bg : t.textDim,
