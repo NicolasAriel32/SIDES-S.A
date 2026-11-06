@@ -28,6 +28,7 @@ import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recupera
 import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
 import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
 import { seleccionarVerificacionesAleatorias } from './domain/seleccionVerificaciones.js';
+import { evaluarConcordanciaContramuestra } from './domain/concordanciaContramuestra.js';
 
 
 /* =================================================================
@@ -517,7 +518,8 @@ const dataService = {
         *,
         prueba:prueba_id (
           numero_secuencial, id_maquina, numero_caja, numero_lote,
-          codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado
+          codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado,
+           cantidad_cabezales_afectados, estado_final, anulada
         )
       `)
       .eq('resultado', 'PENDIENTE')
@@ -544,6 +546,9 @@ const dataService = {
         lote:           p.numero_lote,
         codigoProducto: p.codigo_producto,
         resultadoPrueba: p.resultado,
+        cabezalesDefectuosos: p.cantidad_cabezales_afectados,
+        anulada: p.anulada,
+        estadoFinal: p.estado_final,
         operario:       usuariosMap.get(p.operario_legajo) || p.operario_legajo || '',
         fechaSenal:     normalizarFechaUTC(fechaP),
       }
@@ -620,43 +625,42 @@ const dataService = {
     return (insertadas || []).length > 0
   },
 
-  // Completa una verificación. resultado = OK solo si todo coincide; si no,
-  // DISCREPANCIA + genera_nc para que el supervisor abra la no conformidad.
+  // Cierre con validación autoritativa del servidor: jamás confiar en el OK
+  // calculado en el navegador ni permitir UPDATE directo desde esta pantalla.
   async completarVerificacion(id, payload, supervisorLegajo, supervisorNombre) {
-    const ok = payload.muestrasPresentes === 'si_todas'
-      && payload.coincideEtiquetaLote === true
-      && payload.coincideCaja === true
-    const resultado = ok ? 'OK' : 'DISCREPANCIA'
-
-    const { data, error } = await supabase
-      .from('verificaciones_fisicas')
-      .update({
-        fecha_verificacion:     new Date().toISOString(),
-        muestras_presentes:     payload.muestrasPresentes,
-        cantidad_encontrada:    payload.cantidadEncontrada ?? null,
-        coincide_etiqueta_lote: payload.coincideEtiquetaLote,
-        coincide_caja:          payload.coincideCaja,
-        observaciones:          payload.observaciones || null,
-        resultado,
-        genera_nc:              resultado === 'DISCREPANCIA',
-        updated_at:             new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .maybeSingle()
-
-    console.log('completarVerificacion response:', { id, resultado, data, error })
-    if (error) { console.error('completarVerificacion:', error); return null }
-
-    await this.logEvent({
-      accion:        'UPDATE',
-      usuario:       supervisorNombre || supervisorLegajo,
-      usuarioLegajo: supervisorLegajo,
-      desc:          `Completó verificación física ${data?.codigo || id} · ${resultado}`,
-      tabla:         'verificaciones_fisicas',
-      registroId:    id,
-    })
-    return { id, resultado }
+    try {
+      const { data, error } = await supabase.rpc('vf_completar_contramuestra_segura', {
+        p_verificacion_id: id,
+        p_muestras_presentes: payload.muestrasPresentes,
+        p_cantidad_encontrada: payload.cantidadEncontrada,
+        p_defectuosos_encontrados: payload.defectuososEncontrados,
+        p_coincide_etiqueta_lote: payload.coincideEtiquetaLote,
+        p_coincide_caja: payload.coincideCaja,
+        p_observaciones: payload.observaciones || null,
+      });
+      if (error || !data || !['OK', 'DISCREPANCIA'].includes(data.resultado) ||
+          data.verificacion_id !== id) {
+        console.error('Completar verificación: rechazo o resultado inesperado');
+        return null;
+      }
+      try {
+        await this.logEvent({
+          accion: 'UPDATE',
+          usuario: supervisorNombre || supervisorLegajo,
+          usuarioLegajo: supervisorLegajo,
+          desc: 'Completó verificación física ' + id + ' · ' + data.resultado,
+          tabla: 'verificaciones_fisicas',
+          registroId: id,
+        });
+      } catch (auditError) {
+        // El servidor ya confirmó la transacción; no simular fracaso del cierre.
+        console.error('Falló auditoría auxiliar de cliente:', auditError);
+      }
+      return { id, resultado: data.resultado };
+    } catch (error) {
+      console.error('Completar verificación: RPC no disponible');
+      return null;
+    }
   },
 
   // ===== PRUEBAS =====
