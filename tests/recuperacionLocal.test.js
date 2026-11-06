@@ -113,3 +113,40 @@ test('no limpia si falla la eliminación de la señal',()=>{
  assert.equal(r.estado,'CONFIRMADA_CON_RESIDUOS');
  assert.equal(f.intentos.leer(maquinaId).requestId,requestId);
 });
+
+test('la respuesta remota tardía NO borra evidencia si se perdió Web Lock',async()=>{
+ const f=fixture();
+ f.senales.guardar(maquinaId,senal);
+ f.borradores.guardar(maquinaId,requestId,{caja:'33'});
+ f.intentos.preparar(maquinaId,requestId,payload);
+ let completar;
+ let permiso=true;
+ const resultado=recuperarEstadoLocal({
+   ...f,
+   puedeModificar:()=>permiso,
+   consultar:()=>new Promise(resolve=>{completar=resolve}),
+ });
+ // Dejar comenzar la consulta sin necesidad de navegar ni crear servidor real.
+ await Promise.resolve();
+ assert.equal(typeof completar,'function');
+ permiso=false;
+ completar({estado:'CONFIRMADA',pruebaId:'db-100'});
+ const r=await resultado;
+ assert.equal(r.estado,'INCIERTO');
+ assert.equal(f.senales.leer(maquinaId).senal.requestId,requestId);
+ assert.equal(f.borradores.inspeccionar(maquinaId).requestId,requestId);
+ assert.equal(f.intentos.leer(maquinaId).requestId,requestId);
+});
+test('sin lock desde el inicio no hace consulta remota ni modifica evidencias',async()=>{
+ const f=fixture();
+ f.senales.guardar(maquinaId,senal);
+ f.intentos.preparar(maquinaId,requestId,payload);
+ let llamadas=0;
+ const r=await recuperarEstadoLocal({
+   ...f,puedeModificar:()=>false,
+   consultar:async()=>{llamadas++;return {estado:'CONFIRMADA',pruebaId:'db-100'}},
+ });
+ assert.equal(r.estado,'INCIERTO');
+ assert.equal(llamadas,0);
+ assert.equal(f.intentos.leer(maquinaId).requestId,requestId);
+});
