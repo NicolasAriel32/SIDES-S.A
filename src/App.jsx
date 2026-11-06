@@ -21,7 +21,7 @@ import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
 import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
-import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
+import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorExclusivo.js';
 import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
@@ -1949,6 +1949,29 @@ const VistaOperario = ({ t, user, refresh }) => {
   const borradorHidratado = useRef(null);
   const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
   const [revisionEditor, setRevisionEditor] = useState(0);
+  const [permisoPuesto, setPermisoPuesto] = useState({ maquina: null, ok: false });
+  const [revisionPuesto, setRevisionPuesto] = useState(0);
+  const permisoPuestoRef = useRef(null);
+  useEffect(() => {
+    const maquina = maquinaInfo?.id;
+    permisoPuestoRef.current = null;
+    setPermisoPuesto({ maquina, ok: false });
+    if (!maquina) return undefined;
+    let vigente = true;
+    const reserva = reservarPuestoMaquina(navigator.locks, maquina);
+    reserva.listo.then(ok => {
+      if (!vigente) return;
+      permisoPuestoRef.current = ok ? maquina : null;
+      setPermisoPuesto({ maquina, ok });
+    });
+    return () => {
+      vigente = false;
+      permisoPuestoRef.current = null;
+      reserva.soltar();
+    };
+  }, [maquinaInfo?.id, revisionPuesto]);
+  const puestoActivo = Boolean(maquinaInfo?.id) &&
+    permisoPuesto.ok && permisoPuesto.maquina === maquinaInfo.id;
   useEffect(() => {
     const id = pruebaPendiente?.requestId;
     if (!id || !pruebaPendiente?.maquina) {
@@ -2047,7 +2070,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
-  const editorActivo = permisoEditor.ok &&
+  const editorActivo = puestoActivo && permisoEditor.ok &&
     permisoEditor.requestId === pruebaPendiente?.requestId &&
     !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
   useEffect(() => {
@@ -2083,6 +2106,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   // limpia del almacenamiento local. Se usa al volver a entrar con una señal
   // que ya superó los 60 minutos.
   const registrarPendienteAuto = async (senal, maquinaId) => {
+    if (permisoPuestoRef.current !== maquinaId) return false;
     try {
       const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
       if (error || borradorTieneCarga(borrador)) {
@@ -2126,7 +2150,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // Restauración coherente para la entrada, el cambio de máquina y la revisión.
   const restaurarEstadoDeMaquina = async maquinaId => {
-    if (!maquinaId) return;
+    if (!maquinaId || permisoPuestoRef.current !== maquinaId) return;
     recuperarSenalConId(maquinaId); // Migración conservadora de una señal antigua.
     const revision = await revisarEstadoLocal(maquinaId);
     if (revision.estado === 'CONFIRMADA_LIMPIA') {
@@ -2193,10 +2217,16 @@ const VistaOperario = ({ t, user, refresh }) => {
       // Recalcular contador y autocompletar lote/producto con último registro de la máquina
       if (m?.id) await recalcularContador(m.id, true);
 
-      await restaurarEstadoDeMaquina(m?.id);
+      // La recuperación puede migrar señales y escribir PENDIENTE; esperar
+      // a obtener exclusividad por máquina antes de tocar el almacenamiento.
     };
     init();
   }, [user]);
+
+  useEffect(() => {
+    if (!puestoActivo || !maquinaInfo?.id) return;
+    restaurarEstadoDeMaquina(maquinaInfo.id);
+  }, [puestoActivo, maquinaInfo?.id, revisionPuesto]);
 
   // v7: cambio de máquina para roles de supervisión (carga en cualquier máquina)
   const cambiarMaquina = async (id) => {
@@ -2210,12 +2240,12 @@ const VistaOperario = ({ t, user, refresh }) => {
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
     await recalcularContador(m.id, true);
-    await restaurarEstadoDeMaquina(m.id);
+    // La restauración se dispara sólo al obtener el lock de la nueva máquina.
   };
 
   // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
-    if (!maquinaInfo?.id) return;
+    if (!maquinaInfo?.id || permisoPuestoRef.current !== maquinaInfo.id) return;
     const maquinaId = maquinaInfo.id;
     try {
       // Una sola pestaña puede crear la próxima señal de este operario/máquina.
@@ -2273,7 +2303,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
-    if (!pruebaPendiente || autoGuardado || !editorActivo) return;
+    if (!puestoActivo || permisoPuestoRef.current !== pruebaPendiente?.maquina || !pruebaPendiente || autoGuardado || !editorActivo) return;
     // No sustituir un ensayo ya enviado por un PENDIENTE con el mismo UUID.
     if (almacenIntentos.leer(pruebaPendiente.maquina)) {
       setErrorBorrador('Hay un intento previo de envío. Revisá su confirmación antes de continuar.');
@@ -2424,7 +2454,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
-    if (submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
+    if (permisoPuestoRef.current !== pruebaPendiente?.maquina || submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
@@ -2479,7 +2509,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   // Recupera el payload original de un envío anterior sin reconstruirlo
   // desde campos que pudieron cambiar, ni inventar un nuevo identificador.
   const reintentarEnvioPrevio = async () => {
-    if (submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
+    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
         !maquinaInfo?.id || !estadoRecuperacion.requestId ||
         (pruebaPendiente && !editorActivo)) return;
     setSubmitting(true);
@@ -2543,6 +2573,19 @@ const VistaOperario = ({ t, user, refresh }) => {
               Reintentar exactamente el envío anterior
             </button>
           )}
+        </div>
+      )}
+      {!puestoActivo && maquinaInfo?.id && (
+        <div role="alert" style={{ padding: 14, marginBottom: 12,
+          border: `1px solid ${t.warn}`, borderRadius: 8,
+          background: t.warnSoft, color: t.text }}>
+          Esta máquina está abierta en otra pestaña o el navegador no admite
+          bloqueo exclusivo. No se permite iniciar, recuperar ni enviar pruebas.
+          Cerrá la otra pestaña y volvé a intentar.
+          <button type="button" onClick={() => setRevisionPuesto(n => n + 1)}
+            style={{ display: 'block', marginTop: 8, padding: '8px 12px' }}>
+            Intentar tomar el puesto
+          </button>
         </div>
       )}
       {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
