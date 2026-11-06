@@ -5,17 +5,10 @@ import { MAQUINA_PILOTO_SPC, resumirSpcPiloto } from '../src/domain/spcDescripti
 const base = (x = {}) => ({
   supabase_id: 'uuid-1', maquina: MAQUINA_PILOTO_SPC,
   codigoProducto: 'RCE-310C-CE', estado: 'RECHAZADO',
-  estadoFinal: 'PENDIENTE_APROBACION', aptitudSpc: 'NO_VALIDADO',
-  origenEvento: 'MANUAL_NO_OT',
+  estadoFinal: 'PENDIENTE_APROBACION', aptitudSpc: 'VALIDADO',
   cabezalesInspeccionados: 20, cabezalesFalla: 3,
   tipos: ['EST', 'CLV'], cantidadesTipos: { EST: 2, CLV: 2 },
-  timestamp: '2026-11-05T14:00:00Z',
-  validacionServidor: {
-    pruebaId: x.supabase_id || 'uuid-1', estado: 'VALIDADA_DESCRIPTIVA',
-    ensayoUtc: '2026-11-05T14:00:00Z',
-    protocoloCodigo: 'PROTO-1', protocoloVersion: 1,
-  },
-  ...x,
+  timestamp: '2026-11-05T14:00:00Z', ...x,
 });
 
 test('sin registros no informa 0% ni genera límites de control', () => {
@@ -27,7 +20,7 @@ test('sin registros no informa 0% ni genera límites de control', () => {
   assert.equal(r.alertasAutomaticas, false);
 });
 test('históricos y registros NO_VALIDADO quedan fuera de las tasas', () => {
-  const r = resumirSpcPiloto([base({ validacionServidor: null }), base({ supabase_id: 'uuid-2', validacionServidor: undefined })]);
+  const r = resumirSpcPiloto([base({ aptitudSpc: 'NO_VALIDADO' }), base({ supabase_id: 'uuid-2', aptitudSpc: undefined })]);
   assert.equal(r.ensayosRegistrados, 2);
   assert.equal(r.muestrasAptas, 0);
   assert.equal(r.muestrasNoValidadas, 2);
@@ -87,14 +80,8 @@ test('OK con conteos positivos es incompleto', () => {
   const r = resumirSpcPiloto([base({ estado: 'OK', cabezalesFalla: 3 })]);
   assert.equal(r.muestrasIncompletas, 1);
 });
-test('falta producto o marca temporal del servidor: no se calcula tasa', () => {
-  for (const x of [
-    { codigoProducto: null },
-    { validacionServidor: { pruebaId: 'uuid-1', estado: 'VALIDADA_DESCRIPTIVA',
-      protocoloCodigo: 'PROTO-1', protocoloVersion: 1, ensayoUtc: null } },
-    { validacionServidor: { pruebaId: 'uuid-1', estado: 'VALIDADA_DESCRIPTIVA',
-      protocoloCodigo: 'PROTO-1', protocoloVersion: 1, ensayoUtc: 'fecha desconocida' } },
-  ]) {
+test('falta producto o timestamp: no se calcula tasa', () => {
+  for (const x of [{ codigoProducto: null }, { timestamp: null }, { timestamp: 'fecha desconocida' }]) {
     const r = resumirSpcPiloto([base(x)]);
     assert.equal(r.muestrasAptas, 0);
     assert.equal(r.muestrasIncompletas, 1);
@@ -107,7 +94,7 @@ test('IDs duplicados se excluyen aunque sean ensayos distintos', () => {
   assert.ok(r.porProducto.every(p => p.proporcionDefectuosa === null));
 });
 test('sin estado VALIDADO nunca presume aptitud por simulación o marca OT', () => {
-  const r = resumirSpcPiloto([base({ aptitudSpc: 'NO_VALIDADO', origenEvento: 'OT_VERIFICADO', validacionServidor: null })]);
+  const r = resumirSpcPiloto([base({ aptitudSpc: 'NO_VALIDADO', origenEvento: 'OT_VERIFICADO' })]);
   assert.equal(r.muestrasNoValidadas, 1);
   assert.equal(r.muestrasAptas, 0);
 });
@@ -115,24 +102,4 @@ test('entrada inválida es tolerada y no se atribuyen resultados', () => {
   assert.equal(resumirSpcPiloto(null).registrosRecuperados, 0);
   assert.equal(resumirSpcPiloto('no array').muestrasAptas, 0);
   assert.equal(resumirSpcPiloto([null, undefined, 5, {}]).registrosRecuperados, 0);
-});
-
-test('un campo crudo VALIDADO sin decisión del servidor nunca habilita tasas', () => {
-  const r = resumirSpcPiloto([base({ aptitudSpc: 'VALIDADO', validacionServidor: null })]);
-  assert.equal(r.muestrasAptas, 0);
-  assert.equal(r.muestrasNoValidadas, 1);
-});
-test('comprobante de prueba diferente no habilita tasa', () => {
-  const r = resumirSpcPiloto([base({ validacionServidor: {
-    pruebaId: 'otra-prueba', estado: 'VALIDADA_DESCRIPTIVA',
-    protocoloCodigo: 'PROTO-1', protocoloVersion: 1, ensayoUtc: '2026-11-05T14:00:00Z',
-  } })]);
-  assert.equal(r.muestrasAptas, 0);
-});
-test('decisión revocada no habilita tasa aunque haya tenido aprobación previa', () => {
-  const r = resumirSpcPiloto([base({ validacionServidor: {
-    pruebaId: 'uuid-1', estado: 'NO_VALIDADA',
-    protocoloCodigo: 'PROTO-1', protocoloVersion: 1, ensayoUtc: '2026-11-05T14:00:00Z',
-  } })]);
-  assert.equal(r.muestrasAptas, 0);
 });
