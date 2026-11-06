@@ -7,13 +7,14 @@
 // =================================================================
 
 import { createClient } from '@supabase/supabase-js'
+import { claveSesionAuthPorUrl } from './domain/seguridadPuesto.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-// Key explícita: permite borrar la sesión persistida aunque Auth falle offline.
-// La transición obliga a un nuevo login tras aplicar la futura versión.
-export const AUTH_STORAGE_KEY = 'spc001-auth-session-v1'
+// Key explícita igual al valor predeterminado de la versión instalada de
+// supabase-js. Evita abandonar sesiones antiguas en el mismo sessionStorage.
+export const AUTH_STORAGE_KEY = claveSesionAuthPorUrl(supabaseUrl) || 'spc001-auth-session-v1'
 
 if (!supabaseUrl || !supabaseAnonKey) {
   // Mensaje claro en consola cuando faltan las variables
