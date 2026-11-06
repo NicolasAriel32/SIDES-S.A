@@ -11,13 +11,32 @@ ALTER TABLE public.verificaciones_fisicas
   ADD COLUMN IF NOT EXISTS cantidad_defectuosos_encontrada integer,
   ADD COLUMN IF NOT EXISTS cantidad_sin_defectos_encontrada integer;
 
-ALTER TABLE public.verificaciones_fisicas
-  ADD CONSTRAINT vf_defectuosos_no_negativos_chk
-  CHECK (cantidad_defectuosos_encontrada IS NULL OR cantidad_defectuosos_encontrada >= 0)
-  NOT VALID,
-  ADD CONSTRAINT vf_sin_defectos_no_negativos_chk
-  CHECK (cantidad_sin_defectos_encontrada IS NULL OR cantidad_sin_defectos_encontrada >= 0)
-  NOT VALID;
+-- PostgreSQL no ofrece ADD CONSTRAINT IF NOT EXISTS: evitar fallo al
+-- reintentar una migración parcialmente aplicada sin relajar controles.
+DO $constraints$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conrelid='public.verificaciones_fisicas'::regclass
+      AND conname='vf_defectuosos_no_negativos_chk'
+  ) THEN
+    ALTER TABLE public.verificaciones_fisicas
+      ADD CONSTRAINT vf_defectuosos_no_negativos_chk
+      CHECK (cantidad_defectuosos_encontrada IS NULL
+        OR cantidad_defectuosos_encontrada >= 0) NOT VALID;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conrelid='public.verificaciones_fisicas'::regclass
+      AND conname='vf_sin_defectos_no_negativos_chk'
+  ) THEN
+    ALTER TABLE public.verificaciones_fisicas
+      ADD CONSTRAINT vf_sin_defectos_no_negativos_chk
+      CHECK (cantidad_sin_defectos_encontrada IS NULL
+        OR cantidad_sin_defectos_encontrada >= 0) NOT VALID;
+  END IF;
+END
+$constraints$;
 
 CREATE SCHEMA IF NOT EXISTS spc_private;
 REVOKE ALL ON SCHEMA spc_private FROM PUBLIC, anon;
