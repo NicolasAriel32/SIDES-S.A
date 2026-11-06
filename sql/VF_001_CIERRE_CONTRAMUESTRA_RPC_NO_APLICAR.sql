@@ -5,6 +5,9 @@
 -- Contramuestra física: presencia, exactamente 20, caja/lote y mismos
 -- cabezales defectuosos/no defectuosos del registro de ensayo original.
 -- No vuelve a ensayar ni modifica pruebas.resultado ni spc_uso_estadistico.
+-- DECISION PLANTA 2026-11-06: DISCREPANCIA se registra solamente como
+-- hallazgo fisico del encargado; NO crea ni señala NC automatica.
+-- Se mantiene genera_nc=false y no_conformidad_id=NULL.
 BEGIN;
 
 ALTER TABLE public.verificaciones_fisicas
@@ -156,7 +159,8 @@ BEGIN
          coincide_caja=p_coincide_caja,
          observaciones=NULLIF(btrim(p_observaciones),''),
          resultado=v_resultado,
-         genera_nc=(v_resultado='DISCREPANCIA'),
+         genera_nc=false,
+         no_conformidad_id=NULL,
          updated_at=clock_timestamp()
    WHERE id=v_vf.id AND resultado='PENDIENTE';
   IF NOT FOUND THEN
