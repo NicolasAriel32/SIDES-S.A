@@ -4089,7 +4089,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
       )}
 
       {/* SPC-002: observación estadística MAQ-010, sin decisiones automáticas */}
-      <PanelSpcPiloto t={t} pruebas={testsHistorico} />
+      <PanelSpcPiloto t={t} supabase={supabase} />
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
