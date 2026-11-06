@@ -13,13 +13,17 @@ export function crearAlmacenIntentos(storage, legajo) {
         throw new Error('Identidad del intento inconsistente.');
       }
       let original;
+      let existia;
       try {
         const raw = storage.getItem(clave(maquina));
-        original = raw ? JSON.parse(raw) : null;
+        existia = raw !== null;
+        original = existia ? JSON.parse(raw) : null;
       } catch {
         throw new Error('No se puede leer el intento anterior; no se enviaron datos.');
       }
-      if (original !== null) {
+      // "null" es un archivo de intento inválido, no una autorización para
+      // reemplazarlo. No se sobrescribe ninguna evidencia preexistente.
+      if (existia) {
         if (original?.version !== 1 || original?.maquina !== maquina ||
             original?.requestId !== requestId || !original.payload) {
           throw new Error('Existe un envío previo diferente o corrupto. No sobrescribas esta señal.');
@@ -45,7 +49,14 @@ export function crearAlmacenIntentos(storage, legajo) {
     leer(maquina) {
       try {
         const raw = storage.getItem(clave(maquina));
-        return raw ? JSON.parse(raw) : null;
+        if (raw === null) return null;
+        const x = JSON.parse(raw);
+        if (x?.version !== 1 || x?.maquina !== maquina || !x.requestId ||
+            !x.payload || x.payload.request_id !== x.requestId ||
+            x.payload.id_maquina !== maquina) {
+          return { version: -1, error: 'Registro de intento inválido; no se modificó.' };
+        }
+        return x;
       } catch {
         return { version: -1, error: 'Registro de intento ilegible' };
       }
