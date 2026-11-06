@@ -25,7 +25,7 @@ import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorE
 import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
-import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage } from './domain/preflightPuesto.js';
+import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
 
 
 /* =================================================================
@@ -2110,7 +2110,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const preflightPuesto = evaluarPreflight({
     // No afirmar que una máquina está libre antes de reconciliar su evidencia.
     // El estado de otra máquina tampoco autoriza nuevas pruebas en la actual.
-    estadoLocal: estadoActualPuesto?.estado || 'SIN_VERIFICAR',
+    estadoLocal: estadoPreflightPorMaquina(estadoRecuperacion, maquinaInfo?.id),
     tieneLock: puestoActivo,
     authVerificada: Boolean(user?.authUserId),
     storageDisponible: escrituraLocalVerificada,
