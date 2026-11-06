@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { guardarPruebaSegura } from '../src/api/registroSeguro.js';
+import { guardarPruebaSegura, reintentarIntentoGuardado } from '../src/api/registroSeguro.js';
+import { construirPayloadPruebaEstanqueidad } from '../src/api/estanqueidad.js';
+import { crearAlmacenIntentos } from '../src/domain/intentosRegistro.js';
 const testPayload={
  requestId:'84e625d1-2c1b-4f8a-a643-7e98b437c99f',
  maquina:'MAQ-010',legajoOperario:'OP1',fechaSenal:'2026-11-05T10:00:00.000Z',
@@ -63,4 +65,54 @@ test('sin Web Locks el RPC nunca se ejecuta',async()=>{
  const db=client();
  await assert.rejects(guardarPruebaSegura({...opts(db),lockManager:null}),/no admite bloqueo/);
  assert.equal(db.calls.length,0);
+});
+
+test('reintento manual transmite el payload original aun si la UI ya no lo tiene', async()=>{
+ const storage=memory(), payload=construirPayloadPruebaEstanqueidad(testPayload);
+ crearAlmacenIntentos(storage,'OP1').preparar('MAQ-010',testPayload.requestId,payload);
+ const db=client();
+ const r=await reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId:testPayload.requestId});
+ assert.equal(r.data.prueba_id,'id-1');assert.deepEqual(db.calls,[payload]);
+ assert.equal(crearAlmacenIntentos(storage,'OP1').leer('MAQ-010').requestId,testPayload.requestId);
+});
+test('reintento manual de un PENDIENTE no convierte el registro en ensayo físico', async()=>{
+ const storage=memory(), testPendiente={...testPayload,estado:'PENDIENTE',autoPendiente:true,
+  cabezalesFalla:0,tipos:[],cantidadesTipos:{},codigoProducto:null,caja:null,lote:null};
+ const payload=construirPayloadPruebaEstanqueidad(testPendiente);
+ crearAlmacenIntentos(storage,'OP1').preparar('MAQ-010',testPendiente.requestId,payload);
+ const db=client();
+ const r=await reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId:testPendiente.requestId});
+ assert.equal(r.data.prueba_id,'id-1');
+ assert.equal(db.calls[0].resultado,'PENDIENTE');
+ assert.equal(db.calls[0].cabezales_afectados,0);
+ assert.equal(db.calls[0].codigo_producto,null);
+});
+test('reintento manual ya confirmado no vuelve a escribir', async()=>{
+ const storage=memory(),payload=construirPayloadPruebaEstanqueidad(testPayload);
+ crearAlmacenIntentos(storage,'OP1').preparar('MAQ-010',testPayload.requestId,payload);
+ const db=client({record:{id:'confirmado',numero_secuencial:31}});
+ const r=await reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId:testPayload.requestId});
+ assert.equal(r.data.prueba_id,'confirmado');assert.equal(db.calls.length,0);
+});
+test('reintento manual sin registro o con identidad distinta falla cerrado', async()=>{
+ const db=client(),storage=memory(),requestId=testPayload.requestId;
+ await assert.rejects(reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId}),/No existe un intento íntegro/);
+ const payload=construirPayloadPruebaEstanqueidad(testPayload);
+ crearAlmacenIntentos(storage,'OP1').preparar('MAQ-010',requestId,payload);
+ await assert.rejects(reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId:'UUID-diferente'}),/No existe un intento íntegro/);
+ assert.equal(db.calls.length,0);
+});
+test('red desconectada mantiene el intento manual para otro intento explícito',async()=>{
+ const storage=memory(),payload=construirPayloadPruebaEstanqueidad(testPayload);
+ crearAlmacenIntentos(storage,'OP1').preparar('MAQ-010',testPayload.requestId,payload);
+ const db=client({rpc:async()=>{throw Error('offline')}});
+ const r=await reintentarIntentoGuardado({supabase:db,storage,lockManager:locks(),
+  legajo:'OP1',maquina:'MAQ-010',requestId:testPayload.requestId});
+ assert.equal(r.data,null);
+ assert.equal(crearAlmacenIntentos(storage,'OP1').leer('MAQ-010').requestId,testPayload.requestId);
 });
