@@ -6041,7 +6041,24 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState('calidad');
 
   useEffect(() => {
-    if (!esModoPasillo) dataService.getCurrentUser().then(u => setUser(u));
+    if (esModoPasillo) return undefined;
+    let vigente = true;
+    dataService.getCurrentUser()
+      .then(u => { if (vigente) setUser(u); })
+      .catch(() => { if (vigente) setUser(null); });
+
+    // Cuando Supabase revoca/descarta la sesión en esta pestaña, ocultar
+    // inmediatamente cualquier pantalla de producción y conservar evidencia SPC.
+    const { data: authListener } = supabase.auth.onAuthStateChange(event => {
+      if (event === 'SIGNED_OUT') {
+        limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+        if (vigente) setUser(null);
+      }
+    });
+    return () => {
+      vigente = false;
+      authListener?.subscription?.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
