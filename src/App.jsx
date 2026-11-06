@@ -29,6 +29,7 @@ import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, es
 import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
 import { seleccionarVerificacionesAleatorias } from './domain/seleccionVerificaciones.js';
 import { evaluarConcordanciaContramuestra } from './domain/concordanciaContramuestra.js';
+import { completarContramuestraEnServidor } from './api/cierreContramuestra.js';
 
 
 /* =================================================================
@@ -625,42 +626,27 @@ const dataService = {
     return (insertadas || []).length > 0
   },
 
-  // Cierre con validación autoritativa del servidor: jamás confiar en el OK
-  // calculado en el navegador ni permitir UPDATE directo desde esta pantalla.
+  // Cierre seguro: el servidor revalida el registro y computa resultado.
+  // Nunca se escribe directamente en verificaciones_fisicas desde el navegador.
   async completarVerificacion(id, payload, supervisorLegajo, supervisorNombre) {
-    try {
-      const { data, error } = await supabase.rpc('vf_completar_contramuestra_segura', {
-        p_verificacion_id: id,
-        p_muestras_presentes: payload.muestrasPresentes,
-        p_cantidad_encontrada: payload.cantidadEncontrada,
-        p_defectuosos_encontrados: payload.defectuososEncontrados,
-        p_coincide_etiqueta_lote: payload.coincideEtiquetaLote,
-        p_coincide_caja: payload.coincideCaja,
-        p_observaciones: payload.observaciones || null,
-      });
-      if (error || !data || !['OK', 'DISCREPANCIA'].includes(data.resultado) ||
-          data.verificacion_id !== id) {
-        console.error('Completar verificación: rechazo o resultado inesperado');
-        return null;
-      }
+    const respuesta = await completarContramuestraEnServidor(supabase, id, payload);
+    if (!respuesta) return null;
+    if (!respuesta.duplicado) {
       try {
         await this.logEvent({
           accion: 'UPDATE',
           usuario: supervisorNombre || supervisorLegajo,
           usuarioLegajo: supervisorLegajo,
-          desc: 'Completó verificación física ' + id + ' · ' + data.resultado,
+          desc: 'Completó verificación física ' + id + ' · ' + respuesta.resultado,
           tabla: 'verificaciones_fisicas',
           registroId: id,
         });
       } catch (auditError) {
-        // El servidor ya confirmó la transacción; no simular fracaso del cierre.
-        console.error('Falló auditoría auxiliar de cliente:', auditError);
+        // La RPC ya confirmó el cierre; la auditoría auxiliar no lo revierte.
+        console.error('No se pudo guardar auditoría auxiliar de cliente');
       }
-      return { id, resultado: data.resultado };
-    } catch (error) {
-      console.error('Completar verificación: RPC no disponible');
-      return null;
     }
+    return respuesta;
   },
 
   // ===== PRUEBAS =====
