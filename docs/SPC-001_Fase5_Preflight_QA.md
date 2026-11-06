@@ -1,31 +1,64 @@
-# SPC-001 · Fase 5 — Preflight y soporte seguro para despliegue controlado
+# SPC-001 · Fase 5 — preflight y soporte seguro
 
-## Objetivo
-Preparar diagnóstico de puesto para la futura validación paso a paso desde Windows, sin realizar todavía E2E, despliegues ni cambios en producción.
+**Estado:** implementación y pruebas automatizadas; validación real desde Windows reservada para la etapa final. **Sin despliegue ni migraciones de base de datos.**
 
-## Alcance implementado
-- Módulo puro `src/domain/preflightPuesto.js`: verifica disponibilidad de Auth, almacenamiento, exclusividad de máquina, contexto HTTPS/localhost y conectividad reportada por el navegador.
-- Distingue `LIBRE`, `ABIERTA`, `ENVIO_PREVIO`, `HUERFANO`, `INCIERTO`, `INTERVENCION` y confirmaciones con/sin residuos.
-- En estados de intervención, incertidumbre o evidencia huérfana no habilita nuevas pruebas.
-- El botón «Copiar diagnóstico seguro» genera exclusivamente códigos enumerados y booleanos; **no copia** UUID, legajo, payload, contraseñas, tokens ni datos de ensayos.
-- Pruebas unitarias de escenarios libres, pendientes, sin red, sin lock, estados desconocidos y sanitización de reportes.
+## Alcance entregado
 
-## Limitaciones explícitas
-- La indicación `navigator.onLine` no demuestra disponibilidad del servidor Supabase.
-- El diagnóstico es informativo: los controles reales de autorización, bloqueo y persistencia permanecen en los módulos de Fases 1–4. **No sustituye** la verificación de RLS ni la confirmación de una RPC.
-- No se cifraron los borradores existentes. La privacidad frente a otra persona con acceso al mismo perfil Windows continúa requiriendo perfiles separados y gestión organizacional; no habilitar puestos compartidos sin esa política.
-- La fase se apila sobre el PR #4 para no mezclar cambios sin revisión. Ni Fase 4 ni Fase 5 se fusionan automáticamente en `main`.
+1. `src/domain/preflightPuesto.js` define un diagnóstico **informativo**. No autoriza accesos, no confirma pruebas ni reemplaza RLS y los Web Locks operativos de Fases 1–4.
+2. La evaluación contempla el estado local de la máquina **identificada**, autenticación comprobada al ingresar o restaurar sesión (no verificación remota en cada render), capacidad de lectura/escritura/limpieza de una clave efímera de Storage, Web Lock, contexto seguro y `navigator.onLine` (sólo indicativo).
+3. En `SIN_VERIFICAR`, estado inesperado o evidencia huérfana/incierta se informa bloqueo. Nunca se muestra «sin evidencia» antes de inspeccionar los registros de esa máquina.
+4. El informe de soporte tiene **lista blanca cerrada**: sólo versión, códigos conocidos y valores booleanos. Sin legajo, máquinas, UUID, tokens, contraseñas, payload industrial, observaciones ni mensajes de error crudos.
+5. La UI del operario presenta el panel **plegado** en «Soporte técnico · diagnóstico del puesto (piloto)». No ocupa un panel técnico abierto constantemente.
+6. Eventos `online/offline` actualizan el estado reportado de red; **la señal no prueba conectividad con Supabase** y el test de Storage tampoco garantiza capacidad suficiente para un ensayo real.
+7. Las respuestas asincrónicas de reconciliación de otra máquina nunca se usan para presentar ni reintentar estados de la actual.
+8. `recuperarEstadoLocal` incorpora una guarda opcional `puedeModificar` que se vuelve a verificar **después de la consulta remota, antes de eliminar registros confirmados**. Si se perdió el lock mientras llegaba la confirmación, el resultado es incierto y la evidencia no se toca.
 
-## Criterios de aceptación previos a la validación final
-1. `npm test` y `npm run build` en GitHub Actions.
-2. Auditoría del diff y de que no se agregaron migraciones, secretos o escritura de producción.
-3. Revisión de condiciones de carrera y preservación de evidencia pendiente.
-4. PR de borrador abierto con riesgos pendientes.
+## Registro explícito de posproducción
 
-## Pruebas desde PC — reservadas para el final
-1. Windows + Chrome/Edge, un perfil Windows por operario.
-2. Abrir una máquina libre y copiar el diagnóstico: sólo códigos y checks.
-3. Abrir dos pestañas en la misma máquina: la segunda no debe obtener lock.
-4. Desconectar red y verificar diagnóstico, recuperación conservadora y conservación del intento.
-5. Verificar sesión caducada, cambios de rol y revalidación al recuperar foco.
-6. No activar producción hasta confirmar RPC transaccional, backup/restore y RLS real.
+**UX-POST-001**: después del despliegue controlado y de recibir feedback de los operarios, **quitar el diagnóstico y el botón de la pantalla del operario** y mover la funcionalidad a un módulo restringido de Soporte técnico/Mantenimiento. No hacerlo antes del piloto. Requisitos completos en:
+
+- `docs/BACKLOG_POSTPRODUCCION_UX.md`
+- [Issue #6 — UX-POST-001](https://github.com/NicolasAriel32/SIDES-S.A/issues/6)
+- Referencia en `src/App.jsx` con el mismo ID.
+
+## Doble revisión de ingeniería
+
+### Pasada 1 — integridad y exactitud
+
+- Corregido el estado por defecto que antes se mostraba como `LIBRE` sin inspección.
+- Corregida la comprobación superficial de disponibilidad de `localStorage`: ahora se prueba escritura y eliminación de un marcador aleatorio, sin sobrescribir evidencia.
+- Modo red reactivo; las descripciones no confunden `navigator.onLine` con disponibilidad de Supabase.
+- Actualizado CI para cubrir **todos los PR** y **cada push a `main`**, no solo una selección de archivos. El workflow de CI sólo prueba y compila; no despliega.
+
+### Pasada 2 — concurrencia, privacidad y UX
+
+- Diagnóstico y reintentos ligados a la máquina actual, ignorando respuestas tardías de otra máquina.
+- Consulta remota con guarda de permiso vigente antes de limpiar una prueba ya confirmada.
+- Tests de pérdida de lock durante una consulta y de conservación de señal, borrador e intento.
+- Contrato de sanitización por lista blanca; tests con entradas inesperadas, intentos de incluir credenciales y estados inválidos.
+- Panel plegado durante el piloto; tarea posproducción registrada en documento y issue.
+
+## Criterios verificables de salida técnica
+
+- `npm ci`, `npm test` y `npm run build` aprobados en GitHub Actions sobre **el último SHA**.
+- El diff no incluye claves, despliegues, escrituras a Supabase, migraciones SQL ni borrado masivo de Storage.
+- Fase 4 fusionada a `main` después de su CI; Fase 5 tiene PR separado y pruebas propias.
+- El código de Fase 5 puede fusionarse tras satisfacer los criterios técnicos; **esto no equivale a autorizar puesta en producción**.
+
+## Riesgos no resueltos por esta fase
+
+- Los ensayos antiguos en `localStorage` **no están cifrados** contra usuarios del mismo perfil Windows. El piloto debe utilizar perfiles Windows segregados; el cifrado/migración exige diseño específico de claves y recuperación offline.
+- La confirmación end-to-end de Auth, RLS, RPC, múltiples pestañas, corte de red y restauración local requiere Windows con Chrome/Edge, en el momento que acordamos.
+- Antes de habilitar planta también deben revisarse backup/restore, contrato RPC del entorno objetivo y permisos reales de producción. Ningún CI sustituye esa comprobación.
+
+## Guion para el final desde tu PC
+
+1. Confirmar navegador, perfil Windows del operario y conexión al entorno **de prueba**.
+2. Probar inicio de sesión y perfil activo; diagnóstico en estado `SIN_VERIFICAR` antes de recuperar, y después resultado correcto.
+3. Comprobar almacenamiento y recuperación con señal, borrador e intento de ejemplo.
+4. Abrir la misma máquina en dos pestañas: una sola puede escribir. Probar además dos máquinas independientes.
+5. Simular cambio de máquina mientras llega una consulta confirmada: no eliminar evidencia después de perder el lock.
+6. Cortar y restaurar la red; diferenciar el estado reportado por navegador de la confirmación remota.
+7. Copiar diagnóstico: no contiene campos personales ni industriales.
+8. Verificar cierre de sesión, vencimiento, contraseña obligatoria, cambios de rol y revocación.
+9. Documentar el resultado de cada prueba antes de considerar cualquier despliegue; no tocar producción hasta aprobación explícita.
