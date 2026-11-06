@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage } from '../src/domain/preflightPuesto.js';
+import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from '../src/domain/preflightPuesto.js';
 const base={estadoLocal:'LIBRE',tieneLock:true,authVerificada:true,storageDisponible:true,navegadorSeguro:true,online:true};
 test('puesto listo sólo para prueba nueva si está libre',()=>{
  const p=evaluarPreflight(base);
@@ -101,4 +101,18 @@ test('no se copian excepciones o payloads inesperados en checks del diagnóstico
  assert.equal(JSON.stringify(p).includes(s),false);
  assert.equal(p.checks.length,1);
  assert.deepEqual(p.bloqueantes,['EVIDENCIA_NO_VERIFICADA']);
+});
+
+test('una respuesta tardía de otra máquina no puede mostrar estado LIBRE en la actual',()=>{
+ const vieja={estado:'LIBRE',maquinaId:'MAQ-010'};
+ assert.equal(estadoPreflightPorMaquina(vieja,'MAQ-011'),'SIN_VERIFICAR');
+ assert.equal(estadoPreflightPorMaquina(vieja,'MAQ-010'),'LIBRE');
+ assert.equal(estadoPreflightPorMaquina(vieja,null),'SIN_VERIFICAR');
+});
+test('un estado inválido, sin máquina u objeto parcial nunca habilitan el puesto',()=>{
+ for(const dato of [null,{}, {maquinaId:'MAQ-010',estado:'FALSO'},{maquinaId:'MAQ-010',estado:null}]){
+  const estado=estadoPreflightPorMaquina(dato,'MAQ-010');
+  assert.equal(estado,'SIN_VERIFICAR');
+  assert.equal(evaluarPreflight({...base,estadoLocal:estado}).puedeCrearNueva,false);
+ }
 });
