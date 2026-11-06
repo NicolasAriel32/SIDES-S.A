@@ -11,6 +11,24 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
 - La comprobación de existencia es diferente de validar el resultado técnico
   de los 20 cabezales; **no habilita automáticamente SPC oficial**.
 
+## Confirmación adicional de Planta — contramuestra física
+
+- El objetivo de la revisión aleatoria es **comprobar que existe físicamente
+  la contramuestra** correspondiente a una prueba del turno anterior.
+- Que aparezca una verificación seleccionada presupone un **registro digital
+  preexistente**: no solicitar al encargado una segunda confirmación de
+  existencia de ese mismo registro.
+- La inspección física no certifica el resultado de estanqueidad ni habilita
+  `VALIDADO` estadístico. No modificar ni aprobar el ensayo original.
+- El formulario existente solicita además cantidad encontrada, coincidencia
+  de etiqueta/lote y caja; son controles ya codificados, pero su alcance
+  obligatorio sigue pendiente de confirmación. No se cambian en esta etapa.
+- La cantidad de selecciones sigue en **2** por conservar el comportamiento
+  existente; Planta no fijó una cantidad nueva.
+- La selección server-side debe partir de pruebas digitales elegibles del
+  turno anterior, persistir identificadores de prueba y contramuestra y
+  registrar la comprobación física de forma trazable e idempotente.
+
 ## Implementación existente que se preserva
 
 - `src/App.jsx`: `asegurarVerificacionesTurnoAnterior` selecciona pruebas del
@@ -21,7 +39,7 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
 - Formulario `ModalVerificacionFisica` pide comprobar contramuestras en almacén,
   cantidad y coincidencia de etiqueta/lote/caja; puede emitir `DISCREPANCIA`.
   El nuevo procedimiento explicado por Planta habla de *existencia del control*.
-  Es necesario acordar si corresponde conservar la inspección física actual.
+  La inspección física de existencia está confirmada; aún falta precisar\n  si cantidad, etiqueta/lote y caja son criterios obligatorios.
   No se modificó ni se presentó como regla aprobada.
 - No se vuelve a medir ni se exige aprobar el resultado del ensayo para
   registrarlo o incluirlo en conteos descriptivos de pruebas registradas.
