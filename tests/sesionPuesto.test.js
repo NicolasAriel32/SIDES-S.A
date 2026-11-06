@@ -130,7 +130,7 @@ test('un error al marcar metadata no anuncia cambio completo',async()=>{
 test('logout limpia perfil aunque signOut devuelva error, sin borrar trazabilidad',async()=>{
  const s=storage(),f=fake({signOutError:{message:'sin red'}});
  s.setItem(KEY,'{}');s.setItem('spc_intento_v1_OP1_MAQ-010','{}');
- await assert.rejects(cerrarSesionPuesto({...params(f,s)}),/sin red/);
+ await assert.rejects(cerrarSesionPuesto({...params(f,s)}),err=>err?.message==='sin red');
  assert.equal(s.getItem(KEY),null);
  assert.ok(s.getItem('spc_intento_v1_OP1_MAQ-010'));
  assert.deepEqual(f.calls.signOut,[{scope:'local'}]);
