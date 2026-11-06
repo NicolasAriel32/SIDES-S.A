@@ -408,32 +408,40 @@ const dataService = {
   },
 
   async changePassword(legajo, newPass) {
-    // 1) Cambiar la contraseña en Supabase Auth (la sesión activa ya tiene el token)
-    const { error: authError } = await supabase.auth.updateUser({ password: newPass })
-    console.log('changePassword auth response:', { legajo, authError })
-    if (authError) { console.error('changePassword auth:', authError); return null }
+    // Si cambió el usuario autenticado, jamás alterar el perfil de otro operario.
+    const current = await this.getCurrentUser();
+    if (!current?.authUserId || current.legajo !== legajo) return null;
 
-    // 2) Marcar el cambio mediante una RPC acotada al usuario autenticado.
-      // No se permite UPDATE directo sobre la fila de usuarios: evita que un
-      // usuario pueda modificar su propio rol, estado o máquina asignada.
-      const { error: metaError } = await supabase.rpc('marcar_password_cambiada')
-      if (metaError) { console.error('changePassword metadata:', metaError); return null }
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || authData?.user?.id !== current.authUserId) return null;
 
-      const { data, error } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('legajo', legajo)
-        .maybeSingle()
+      const { error: passwordError } = await supabase.auth.updateUser({ password: newPass });
+      if (passwordError) return null;
 
-      if (error) { console.error('changePassword usuarios:', error); return null }
-      if (!data) { console.log('changePassword: usuario no encontrado', { legajo }); return null }
+      // El cambio en Auth y la marca en DB no forman una transacción única.
+      // Ante falla de metadata, nunca declarar el cambio completo.
+      const { error: metadataError } = await supabase.rpc('marcar_password_cambiada');
+      if (metadataError) return null;
 
-      const updatedUser = mapUserFromDb(data)
-    const current = await this.getCurrentUser()
-    if (current?.legajo === legajo) {
-      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser))
+      const { data: perfil, error: errorPerfil } = await supabase
+        .from('usuarios').select('*')
+        .eq('id', current.authUserId)
+        .eq('legajo', current.legajo)
+        .maybeSingle();
+      if (errorPerfil) return null;
+      const verificacion = verificarPerfilAutenticado({
+        perfil, authUser: authData.user, legajoSolicitado: current.legajo,
+      });
+      if (!verificacion.ok) return null;
+
+      // Fix fase 4: no perder authUserId tras el cambio de contraseña.
+      const updatedUser = { ...mapUserFromDb(perfil), authUserId: current.authUserId };
+      sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser));
+      return updatedUser;
+    } catch {
+      return null;
     }
-    return updatedUser
   },
 
   // ===== MÁQUINAS =====
