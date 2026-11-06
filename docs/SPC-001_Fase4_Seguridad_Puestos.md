@@ -71,3 +71,21 @@
 - Esta medida evita la mezcla **accidental** de usuarios, pero no protege contra acceso deliberado al `localStorage` desde DevTools o desde el mismo perfil Windows. **No se declara resuelta la confidencialidad**: se requiere cifrado de evidencia con llave fuera del almacenamiento compartido o aislamiento de perfiles Windows gestionados.
 - El cifrado de los datos existentes debe diseñarse con migración reversible y prueba de recuperación offline. No borrar ni convertir automáticamente los registros históricos locales sin una estrategia de recuperación.
 - No se aplicaron cambios a Supabase producción ni a `main`. Continúa prohibido el deploy hasta QA E2E.
+
+
+## Política de seguridad para el piloto Windows (sin E2E todavía)
+
+**Condición obligatoria:** cada operario debe utilizar su propio perfil Windows o, como mínimo, un perfil de navegador gestionado y exclusivo. El cierre de sesión web **no** protege los datos de `localStorage` frente a otra persona que abra el mismo perfil Windows.
+
+**No migrar ni cifrar automáticamente la evidencia existente** mientras los almacenes `crearAlmacenSenales`, `crearAlmacenBorradores` y `crearAlmacenIntentos` tengan contrato síncrono. WebCrypto es asíncrono; sustituir su persistencia sin adaptar todos los flujos de recuperación y reintento podría dejar pruebas inaccesibles o perder ACK. El cifrado de borradores requerirá una fase específica con diseño de gestión de claves, migración recuperable, restauración offline y tests de compatibilidad. No se considera implementado.
+
+**Criterio de salida de Fase 4 a nivel de código:** identidad verificada en Auth, controles por legajo, bloqueo de edición por máquina, preservación de evidencia, manejo de cierre offline, suite unitaria y build verdes. La conformidad operativa de confidencialidad y el E2E en Chrome/Edge son puertas independientes para despliegue.
+
+**Guion reservado para QA final desde PC:**
+1. Perfil Windows A, operario A: abrir máquina, generar señal y borrador, cerrar sesión; confirmar que no desaparecen.
+2. Mismo perfil de navegador, operario B: debe bloquearse el acceso si existe evidencia local de A.
+3. Abrir dos pestañas en la misma máquina: sólo una obtiene lock; cerrar la primera y reintentar en la segunda.
+4. Abrir máquinas distintas: ambos locks son independientes.
+5. Cortar red durante envío y logout: recuperar por UUID sin duplicar, no exponer sesión anterior, preservar el intento.
+6. Probar cambios de rol, usuario inactivo, contraseña obligatoria, expiración de token y revalidación al recuperar foco.
+7. No habilitar operación de planta si falla un escenario; registrar evidencia y revertir el preview sin tocar producción.
