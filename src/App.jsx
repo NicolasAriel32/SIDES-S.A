@@ -26,6 +26,7 @@ import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/segurida
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
+import PanelSpcPiloto from './components/PanelSpcPiloto.jsx';
 
 
 /* =================================================================
@@ -719,6 +720,7 @@ const dataService = {
         cantidadesTipos:     p.spc_request_id ? Object.fromEntries((p.fallas || []).map(f => [f.tipo_falla_id, f.cantidad_items_afectados])) : null,
         origenEvento:        p.spc_origen_evento ?? 'HISTORICO_NO_VERIFICADO',
         aptitudSpc:          p.spc_uso_estadistico ?? 'NO_VALIDADO',
+        cabezalesInspeccionados: p.spc_cabezales_inspeccionados ?? null,
         cabezalesFalla:      p.cantidad_cabezales_afectados ?? 0,
         tuvoFalla:           p.tuvo_falla === true,
         esperandoAprobacion: (p.tuvo_falla === true && ['PENDIENTE_APROBACION','REVISION_100_CAJA'].includes(p.estado_final)),
@@ -4085,6 +4087,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
           <Pill variant="danger" t={t} mono>{pruebasBloqueadas}</Pill>
         </div>
       )}
+
+      {/* SPC-002: observación estadística MAQ-010, sin decisiones automáticas */}
+      <PanelSpcPiloto t={t} pruebas={testsHistorico} />
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
