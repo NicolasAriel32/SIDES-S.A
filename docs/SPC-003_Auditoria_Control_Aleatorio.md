@@ -20,9 +20,8 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
   existencia de ese mismo registro.
 - La inspección física no certifica el resultado de estanqueidad ni habilita
   `VALIDADO` estadístico. No modificar ni aprobar el ensayo original.
-- El formulario existente solicita además cantidad encontrada, coincidencia
-  de etiqueta/lote y caja; son controles ya codificados, pero su alcance
-  obligatorio sigue pendiente de confirmación. No se cambian en esta etapa.
+- Planta confirmó como **obligatorios** cantidad total = 20, caja/lote y
+  distribución física de cabezales con y sin defectos según registro.
 - La cantidad de selecciones sigue en **2** por conservar el comportamiento
   existente; Planta no fijó una cantidad nueva.
 - La selección server-side debe partir de pruebas digitales elegibles del
@@ -46,14 +45,31 @@ La verificación es de **concordancia física-documental**, no una repetición
 de la prueba de estanqueidad ni una certificación de la existencia real
 de una fuga. No cambia el resultado original del operario.
 
-**Revisión pendiente de código:** el formulario actual comprueba presencia,
-cantidad, etiqueta/lote y caja, pero la condición `OK` inspeccionada en
-`completarVerificacion` sólo exige presencia y coincidencia de etiqueta/lote
-y caja; no compara explícitamente `cantidad_encontrada === 20` ni la
-distribución defectuosos/no defectuosos con el registro digital. **No declarar
-este criterio implementado hasta corregirlo con validación en servidor,
-pruebas y manejo seguro de datos históricos incompletos.** No crear un
-resultado ficticio cuando falten cantidades.
+**Corrección de interfaz (sin despliegue):** el formulario exige cantidad
+total encontrada y cantidad identificada con defectos; muestra la cantidad
+digital esperada de defectuosos/sin defectos y su distribución física.
+La función pura `src/domain/concordanciaContramuestra.js` compara:
+total = 20, defectuosos físicos = `cantidad_cabezales_afectados` de la
+prueba original, sin defectos = 20 - defectuosos, caja, lote y presencia.
+Si algún dato digital original es NULL/inconsistente, **no guarda nada**.
+Si la inspección es coherente pero hay un desvío físico, queda
+`DISCREPANCIA` con `genera_nc=true`. No hay repetición del ensayo.
+
+**Contrato transaccional propuesto (NO APLICADO):**
+`sql/VF_001_CIERRE_CONTRAMUESTRA_RPC_NO_APLICAR.sql` crea una RPC de cierre
+que obtiene `auth.uid()`, comprueba asignación, bloquea por ID la verificación,
+vuelve a leer la prueba digital y **calcula resultado en servidor**.
+Registra los dos conteos físicos separados y hora del servidor; admite
+reintento idéntico sin duplicar cierre. El borrador incluye revocar
+UPDATE directo del navegador, lo que exige inventariar clientes antiguos
+antes de migrar. No existe todavía `verificaciones_fisicas` en staging y
+NO se aplicó la migración ni se verificó SQL contra PostgreSQL.
+
+**Advertencia de implementación:** el PR nuevo utiliza la RPC; si se
+publicara sobre la base actual sin migración coordinada, el cierre fallaría
+de forma segura (sin escribir resultado), por lo que **NO debe desplegarse**.
+Aún falta probar autorizaciones por rol, interoperabilidad, concurrencia y
+respuesta ante corte de red.
 
 ## Implementación existente que se preserva
 
@@ -64,9 +80,9 @@ resultado ficticio cuando falten cantidades.
   Se conserva el valor existente en esta entrega.
 - Formulario `ModalVerificacionFisica` pide comprobar contramuestras en almacén,
   cantidad y coincidencia de etiqueta/lote/caja; puede emitir `DISCREPANCIA`.
-  El nuevo procedimiento explicado por Planta habla de *existencia del control*.
-  La inspección física de existencia está confirmada; aún falta precisar\n  si cantidad, etiqueta/lote y caja son criterios obligatorios.
-  No se modificó ni se presentó como regla aprobada.
+  Planta confirmó existencia física, exactamente 20, coincidencia
+  caja/lote y distribución con/sin defectos. La corrección del formulario
+  se realizó en la rama sin desplegar.
 - No se vuelve a medir ni se exige aprobar el resultado del ensayo para
   registrarlo o incluirlo en conteos descriptivos de pruebas registradas.
 - Este control nunca debe escribir `spc_uso_estadistico='VALIDADO'` ni
@@ -115,8 +131,9 @@ atómica, autorizada, por ventana de turno y responsable, sin depender de
 revisado y ejecutar QA en Windows, dejando producción sin modificaciones.
 
 **Requiere confirmación antes de cambiar negocios:** cantidad de controles
-(1 o 2), si se verifica sólo registro o también contramuestra física,
-y el rol exacto de quien ingresa a revisar.
+(1 o 2) y si el cargo encargado de sala corresponde al rol de aplicación
+`supervisor`. La verificación de los 20 cabezales, la identificación
+y la distribución física está confirmada.
 
 ## Decisiones explícitamente descartadas
 
