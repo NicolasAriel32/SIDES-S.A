@@ -167,3 +167,23 @@ test('excepción de red se transforma en código genérico, sin filtrar mensajes
   assert.equal(r.codigo, 'EXCEPCION_DE_LECTURA');
   assert.equal(JSON.stringify(r).includes('token privado'), false);
 });
+
+test('ID duplicado entre páginas no permite afirmar cobertura completa', async () => {
+  const c = cliente([
+    { data: [registro('a'), registro('b')], count: 4, error: null },
+    { data: [registro('b'), registro('d')], count: 4, error: null },
+  ]);
+  const r = await consultar(c, { tamanoPagina: 2 });
+  assert.equal(r.estado, 'PARCIAL');
+  assert.equal(r.codigo, 'COBERTURA_INCIERTA');
+  assert.equal(r.recuperados, 2);
+});
+
+test('ID duplicado dentro de una sola página también es cobertura incierta', async () => {
+  const c = cliente([
+    { data: [registro('a'), registro('a')], count: 2, error: null },
+  ]);
+  const r = await consultar(c, { tamanoPagina: 2 });
+  assert.equal(r.estado, 'PARCIAL');
+  assert.equal(r.codigo, 'COBERTURA_INCIERTA');
+});
