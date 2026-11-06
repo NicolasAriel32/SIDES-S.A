@@ -3448,6 +3448,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
   const [total] = useState(verificaciones.length);
   const [muestrasPresentes, setMuestrasPresentes] = useState('');
   const [cantidadEncontrada, setCantidadEncontrada] = useState('');
+  const [defectuososEncontrados, setDefectuososEncontrados] = useState('');
   const [coincideEtiquetaLote, setCoincideEtiquetaLote] = useState(null);
   const [coincideCaja, setCoincideCaja] = useState(null);
   const [observaciones, setObservaciones] = useState('');
@@ -3458,13 +3459,26 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
   const numeroActual = total - pendientes.length + 1;
 
   const resetForm = () => {
-    setMuestrasPresentes(''); setCantidadEncontrada('');
+    setMuestrasPresentes(''); setCantidadEncontrada(''); setDefectuososEncontrados('');
     setCoincideEtiquetaLote(null); setCoincideCaja(null);
     setObservaciones('');
   };
 
-  const completo = muestrasPresentes !== '' && coincideEtiquetaLote !== null && coincideCaja !== null;
-  const seraOk = muestrasPresentes === 'si_todas' && coincideEtiquetaLote === true && coincideCaja === true;
+  const comoEntero = s => /^\d+$/.test(s) && Number.isSafeInteger(Number(s))
+    ? Number(s) : null;
+  const hallazgo = {
+    muestrasPresentes,
+    cantidadEncontrada: comoEntero(cantidadEncontrada),
+    defectuososEncontrados: comoEntero(defectuososEncontrados),
+    coincideEtiquetaLote, coincideCaja,
+  };
+  const evaluacion = evaluarConcordanciaContramuestra({
+    caja: actual.caja, lote: actual.lote,
+    resultado: actual.resultadoPrueba, estadoFinal: actual.estadoFinal,
+    anulada: actual.anulada, cabezalesDefectuosos: actual.cabezalesDefectuosos,
+  }, hallazgo);
+  const completo = evaluacion.listo;
+  const seraOk = evaluacion.resultado === 'OK';
 
   const horaPrueba = actual.fechaSenal
     ? new Date(actual.fechaSenal).toLocaleString('es-AR', {
@@ -3480,7 +3494,8 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
       actual.id,
       {
         muestrasPresentes,
-        cantidadEncontrada: cantidadEncontrada !== '' ? Number(cantidadEncontrada) : null,
+        cantidadEncontrada: hallazgo.cantidadEncontrada,
+        defectuososEncontrados: hallazgo.defectuososEncontrados,
         coincideEtiquetaLote,
         coincideCaja,
         observaciones,
@@ -3569,6 +3584,13 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
             <Campo label="N° CAJA" valor={actual.caja} />
             <Campo label="N° LOTE" valor={actual.lote} />
             <Campo label="PRODUCTO" valor={actual.codigoProducto} />
+            <Campo label="ESPERADOS" valor="20 cabezales" />
+            <Campo label="CON DEFECTOS (DIGITAL)"
+              valor={Number.isInteger(actual.cabezalesDefectuosos)
+                ? String(actual.cabezalesDefectuosos) : 'Dato no disponible'} />
+            <Campo label="SIN DEFECTOS (DIGITAL)"
+              valor={Number.isInteger(actual.cabezalesDefectuosos)
+                ? String(20 - actual.cabezalesDefectuosos) : 'Dato no disponible'} />
           </div>
 
           {/* Formulario */}
@@ -3596,10 +3618,10 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
 
             <div>
               <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
-                Cantidad encontrada (opcional)
+                Cantidad total de cabezales encontrada (obligatoria)
               </div>
               <input
-                type="number" min="0" value={cantidadEncontrada}
+                type="number" min="0" step="1" value={cantidadEncontrada}
                 onChange={e => setCantidadEncontrada(e.target.value)}
                 placeholder="N° de unidades halladas"
                 style={{
@@ -3609,7 +3631,30 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                 }} />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+                Cabezales identificados con defectos (obligatorio)
+              </div>
+              <input
+                type="number" min="0" step="1" value={defectuososEncontrados}
+                onChange={e => setDefectuososEncontrados(e.target.value)}
+                placeholder="Cantidad de cabezales con defectos encontrada"
+                style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 6,
+                  border: '1px solid ' + t.border, background: t.surfaceHi, color: t.text,
+                  fontFamily: 'Manrope', fontSize: 13, boxSizing: 'border-box'
+                }}
+              />
+              {comoEntero(cantidadEncontrada) !== null &&
+                comoEntero(defectuososEncontrados) !== null &&
+                comoEntero(defectuososEncontrados) <= comoEntero(cantidadEncontrada) && (
+                <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginTop: 5 }}>
+                  Sin defectos hallados: {comoEntero(cantidadEncontrada) - comoEntero(defectuososEncontrados)}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}> 
               <div>
                 <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
                   ¿Coincide etiqueta/lote?
@@ -3637,6 +3682,20 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                   fontFamily: 'Manrope', fontSize: 13, resize: 'vertical', boxSizing: 'border-box'
                 }} />
             </div>
+
+            {!completo && evaluacion.razones.length > 0 && (
+              <div role="alert" style={{
+                padding: '10px 12px', border: '1px solid ' + t.border, borderRadius: 6,
+                fontFamily: 'Manrope', fontSize: 12, color: t.warn,
+              }}>
+                No se puede registrar todavía: faltan datos o existen respuestas
+                contradictorias. Si falta información del registro digital,
+                avisá al responsable; la verificación quedará pendiente.
+                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, marginTop: 4 }}>
+                  {evaluacion.razones.join(' · ')}
+                </div>
+              </div>
+            )}
 
             {completo && (
               <div style={{
