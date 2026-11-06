@@ -1,3 +1,12 @@
+// Mantiene la clave histórica generada por Supabase JS para no dejar
+// tokens huérfanos al introducir la limpieza explícita en un puesto Windows.
+export function claveSesionAuthPorUrl(url) {
+  try {
+    const host = new URL(url).hostname.split('.')[0];
+    return host ? `sb-${host}-auth-token` : null;
+  } catch { return null; }
+}
+
 // SPC-001 Fase 4 — un puesto compartido no debe mostrar datos de otro usuario.
 // No se borra ninguna prueba, señal, borrador ni intento al cerrar sesión.
 export function verificarSesionLocal({ storage, claveUsuario, authUser }) {
