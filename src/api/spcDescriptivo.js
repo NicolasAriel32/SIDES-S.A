@@ -73,6 +73,7 @@ export async function consultarSpcPiloto(
   }
 
   const filas = [];
+  const idsVistos = new Set();
   let totalEsperado = null;
   try {
     while (filas.length < maxFilas) {
@@ -104,6 +105,13 @@ export async function consultarSpcPiloto(
       if (normalizadas.some(x => x === null)) {
         return respuesta(ESTADOS_CONSULTA_SPC.ERROR, [], 'DETALLE_INVALIDO');
       }
+      // Un cambio concurrente puede desplazar páginas y repetir un ID;
+      // aunque la cantidad final coincida, NO se considera cobertura completa.
+      if (normalizadas.some(x => idsVistos.has(x.supabase_id)) ||
+          new Set(normalizadas.map(x => x.supabase_id)).size !== normalizadas.length) {
+        return respuesta(ESTADOS_CONSULTA_SPC.PARCIAL, filas, 'COBERTURA_INCIERTA', totalEsperado);
+      }
+      for (const x of normalizadas) idsVistos.add(x.supabase_id);
       filas.push(...normalizadas);
       if (filas.length === totalEsperado) {
         return respuesta(ESTADOS_CONSULTA_SPC.COMPLETO, filas, null, totalEsperado);
