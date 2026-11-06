@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal } from '../src/domain/seguridadPuesto.js';
+import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal, claveSesionAuthPorUrl } from '../src/domain/seguridadPuesto.js';
 
 function memoria() {
  const m=new Map();
@@ -63,4 +63,10 @@ test('perfiles vacíos o no objetos no autorizan recuperar sesión',()=>{
  for(const perfil of [null,undefined,[],{},'OP1']) {
   assert.equal(verificarPerfilAutenticado({perfil,authUser:{id:'uid-1'}}).ok,false);
  }
+});
+
+test('clave Auth explícita coincide con la convención del cliente Supabase instalado',()=>{
+ assert.equal(claveSesionAuthPorUrl('https://abc123.supabase.co'),'sb-abc123-auth-token');
+ assert.equal(claveSesionAuthPorUrl('http://127.0.0.1:54321'),'sb-127-auth-token');
+ assert.equal(claveSesionAuthPorUrl('sin-url'),null);
 });
