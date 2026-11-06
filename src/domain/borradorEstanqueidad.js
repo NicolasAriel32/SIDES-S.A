@@ -3,6 +3,22 @@ export function crearAlmacenBorradores(storage, legajo) {
   if (!legajo || !storage) throw new Error('Almacenamiento e identidad requeridos.');
   const clave = (maquina) => 'spc_borrador_v1_' + legajo + '_' + maquina;
   return {
+    // Permite recuperar un borrador huérfano sin inventar un UUID. No lo borra.
+    inspeccionar(maquina) {
+      try {
+        const raw = storage.getItem(clave(maquina));
+        if (raw === null) return { borrador: null, requestId: null, error: null };
+        const x = JSON.parse(raw);
+        if (x?.version !== 1 || x?.maquina !== maquina ||
+            typeof x?.requestId !== 'string' || !x.requestId ||
+            !x.campos || typeof x.campos !== 'object' || Array.isArray(x.campos)) {
+          return { borrador: null, requestId: null, error: 'El borrador local no tiene formato válido. Conservá los datos.' };
+        }
+        return { borrador: x.campos, requestId: x.requestId, error: null };
+      } catch {
+        return { borrador: null, requestId: null, error: 'El borrador local es ilegible. No se eliminó.' };
+      }
+    },
     leer(maquina, requestId) {
       try {
         const raw = storage.getItem(clave(maquina));
