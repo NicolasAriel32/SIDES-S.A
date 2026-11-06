@@ -25,6 +25,7 @@ import { reservarEditorExclusivo, reservarPuestoMaquina } from './domain/editorE
 import { inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { iniciarSesionPuesto, restaurarSesionPuesto, cambiarPasswordPuesto, cerrarSesionPuesto } from './api/sesionPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
+import { evaluarPreflight, reportePreflightSeguro, verificarEscrituraStorage, estadoPreflightPorMaquina } from './domain/preflightPuesto.js';
 
 
 /* =================================================================
@@ -1946,6 +1947,33 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [errorPendiente, setErrorPendiente] = useState('');
   const [errorBorrador, setErrorBorrador] = useState('');
   const [estadoRecuperacion, setEstadoRecuperacion] = useState(null);
+  const [escrituraLocalVerificada, setEscrituraLocalVerificada] = useState(false);
+  const [conexionReportada, setConexionReportada] = useState(
+    () => typeof navigator !== 'undefined' && navigator.onLine === true,
+  );
+  // El preflight verifica la capacidad de escribir y limpiar una clave efímera
+  // sin tocar señales, borradores o intentos de ensayos reales.
+  useEffect(() => {
+    const verificarStorage = () => {
+      try {
+        setEscrituraLocalVerificada(verificarEscrituraStorage(
+          window.localStorage, () => window.crypto.randomUUID(),
+        ));
+      } catch {
+        setEscrituraLocalVerificada(false);
+      }
+    };
+    const verificarRedReportada = () => setConexionReportada(navigator.onLine === true);
+    verificarStorage();
+    window.addEventListener('focus', verificarStorage);
+    window.addEventListener('online', verificarRedReportada);
+    window.addEventListener('offline', verificarRedReportada);
+    return () => {
+      window.removeEventListener('focus', verificarStorage);
+      window.removeEventListener('online', verificarRedReportada);
+      window.removeEventListener('offline', verificarRedReportada);
+    };
+  }, []);
   const borradorHidratado = useRef(null);
   const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
   const [revisionEditor, setRevisionEditor] = useState(0);
@@ -2034,7 +2062,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       maquinaId, requestId, pruebaId,
       senales: almacenSenales, borradores: almacenBorradores, intentos: almacenIntentos,
     });
-    setEstadoRecuperacion(estado);
+    setEstadoRecuperacion({ ...estado, maquinaId });
     if (estado.estado !== 'CONFIRMADA_LIMPIA') {
       setErrorBorrador(estado.mensaje || 'La prueba quedó confirmada, pero hay datos locales pendientes de revisar.');
     } else {
@@ -2048,8 +2076,14 @@ const VistaOperario = ({ t, user, refresh }) => {
       intentos: almacenIntentos,
       consultar: requestId => consultarConfirmacionPrueba(supabase, requestId,
         { legajo: user.legajo, maquina: maquinaId }),
+      puedeModificar: () => permisoPuestoRef.current === maquinaId,
     });
-    setEstadoRecuperacion(estado);
+    // No sobrescribir avisos ni estados de la máquina actual con respuestas
+    // tardías recibidas después de liberar su bloqueo exclusivo.
+    if (permisoPuestoRef.current !== maquinaId) return {
+      estado: 'INCIERTO', mensaje: 'La máquina cambió durante la consulta.',
+    };
+    setEstadoRecuperacion({ ...estado, maquinaId });
     if (['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estado.estado)) {
       setErrorBorrador(estado.mensaje || 'Hay datos locales que necesitan revisión.');
     } else if (['LIBRE', 'ABIERTA', 'ENVIO_PREVIO', 'CONFIRMADA_LIMPIA'].includes(estado.estado)) {
@@ -2070,9 +2104,34 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
+  // La consulta del servidor puede finalizar después de cambiar de máquina.
+  // Nunca presentar, reintentar ni usar para edición el estado de otro puesto.
+  const estadoActualPuesto = estadoRecuperacion?.maquinaId === maquinaInfo?.id
+    ? estadoRecuperacion : null;
+  const preflightPuesto = evaluarPreflight({
+    // No afirmar que una máquina está libre antes de reconciliar su evidencia.
+    // El estado de otra máquina tampoco autoriza nuevas pruebas en la actual.
+    estadoLocal: estadoPreflightPorMaquina(estadoRecuperacion, maquinaInfo?.id),
+    tieneLock: puestoActivo,
+    authVerificada: Boolean(user?.authUserId),
+    storageDisponible: escrituraLocalVerificada,
+    navegadorSeguro: typeof window !== 'undefined' && window.isSecureContext === true,
+    online: conexionReportada,
+  });
+  const diagnosticoSeguro = reportePreflightSeguro(preflightPuesto);
+  const copiarDiagnostico = () => {
+    const reporte = JSON.stringify(diagnosticoSeguro, null, 2);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(reporte).catch(() => {
+        window.prompt('Copiá el diagnóstico (sin datos de pruebas)', reporte);
+      });
+    } else {
+      window.prompt('Copiá el diagnóstico (sin datos de pruebas)', reporte);
+    }
+  };
   const editorActivo = puestoActivo && permisoEditor.ok &&
     permisoEditor.requestId === pruebaPendiente?.requestId &&
-    !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
+    !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoActualPuesto?.estado);
   useEffect(() => {
     if (!editorActivo || !pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
     const campos = { tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs };
@@ -2153,6 +2212,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!maquinaId || permisoPuestoRef.current !== maquinaId) return;
     recuperarSenalConId(maquinaId); // Migración conservadora de una señal antigua.
     const revision = await revisarEstadoLocal(maquinaId);
+    if (permisoPuestoRef.current !== maquinaId) return;
     if (revision.estado === 'CONFIRMADA_LIMPIA') {
       borradorHidratado.current = null;
       setPruebaPendiente(null);
@@ -2233,6 +2293,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     const m = machinesList.find(x => x.id === id);
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
+    setEstadoRecuperacion(null);
     borradorHidratado.current = null;
     setPruebaPendiente(null);
     setAutoGuardado(false); setErrorPendiente('');
@@ -2509,21 +2570,21 @@ const VistaOperario = ({ t, user, refresh }) => {
   // Recupera el payload original de un envío anterior sin reconstruirlo
   // desde campos que pudieron cambiar, ni inventar un nuevo identificador.
   const reintentarEnvioPrevio = async () => {
-    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
-        !maquinaInfo?.id || !estadoRecuperacion.requestId ||
+    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoActualPuesto?.estado !== 'ENVIO_PREVIO' ||
+        !maquinaInfo?.id || !estadoActualPuesto.requestId ||
         (pruebaPendiente && !editorActivo)) return;
     setSubmitting(true);
     try {
       const { data, error } = await reintentarIntentoGuardado({
         supabase, storage: localStorage, lockManager: navigator.locks,
         legajo: user.legajo, maquina: maquinaInfo.id,
-        requestId: estadoRecuperacion.requestId,
+        requestId: estadoActualPuesto.requestId,
       });
       if (error || !data?.prueba_id) {
         setErrorBorrador(error?.message || 'No se confirmó el intento anterior. Los datos no se borraron.');
         return;
       }
-      const limpieza = limpiarConfirmado(maquinaInfo.id, estadoRecuperacion.requestId, data.prueba_id);
+      const limpieza = limpiarConfirmado(maquinaInfo.id, estadoActualPuesto.requestId, data.prueba_id);
       if (limpieza.estado === 'CONFIRMADA_LIMPIA') setErrorBorrador('');
       borradorHidratado.current = null;
       setPruebaPendiente(null);
@@ -2551,19 +2612,19 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
-      {estadoRecuperacion && ['ENVIO_PREVIO', 'INCIERTO', 'INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion.estado) && (
+      {estadoActualPuesto && ['ENVIO_PREVIO', 'INCIERTO', 'INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoActualPuesto.estado) && (
         <div role="status" style={{ padding: 14, marginBottom: 12, border: `1px solid ${t.warn}`, borderRadius: 8, color: t.text, background: t.warnSoft }}>
-          <strong>{estadoRecuperacion.estado === 'CONFIRMADA_CON_RESIDUOS'
+          <strong>{estadoActualPuesto.estado === 'CONFIRMADA_CON_RESIDUOS'
             ? 'Prueba confirmada; limpieza local pendiente'
-            : estadoRecuperacion.estado === 'ENVIO_PREVIO'
+            : estadoActualPuesto.estado === 'ENVIO_PREVIO'
               ? 'Intento anterior pendiente de revisión' : 'Registro local que requiere atención'}</strong>
-          <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoRecuperacion.mensaje}</p>
+          <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoActualPuesto.mensaje}</p>
           <button type="button" disabled={!puestoActivo || !maquinaInfo?.id || submitting}
             onClick={() => restaurarEstadoDeMaquina(maquinaInfo.id)}
             style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
             Consultar servidor y revisar registro local
           </button>
-          {estadoRecuperacion.estado === 'ENVIO_PREVIO' && (
+          {estadoActualPuesto.estado === 'ENVIO_PREVIO' && (
             <button type="button"
               disabled={!puestoActivo || submitting || (Boolean(pruebaPendiente) && !editorActivo)}
               onClick={reintentarEnvioPrevio}
@@ -2574,6 +2635,30 @@ const VistaOperario = ({ t, user, refresh }) => {
             </button>
           )}
         </div>
+      )}
+      {/* UX-POST-001: después del go-live trasladar este recurso a Soporte
+          técnico. Ver docs/BACKLOG_POSTPRODUCCION_UX.md e issue #6. */}
+      {maquinaInfo?.id && (
+        <details style={{ border: `1px solid ${t.border}`, borderRadius: 8,
+          padding: '10px 12px', marginBottom: 12, fontSize: 12 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+            Soporte técnico · diagnóstico del puesto (piloto)
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <strong>Estado indicativo: </strong>
+            {diagnosticoSeguro.modo} · {diagnosticoSeguro.estado}
+            {diagnosticoSeguro.bloqueantes.length > 0 &&
+              <span> · Revisar: {diagnosticoSeguro.bloqueantes.join(', ')}</span>}
+            <p style={{ margin: '8px 0', color: t.textMuted }}>
+              La conexión es una señal del navegador, no una verificación del
+              servidor. Este panel no concede permisos ni confirma ensayos.
+            </p>
+            <button type="button" onClick={copiarDiagnostico}
+              style={{ padding: '5px 8px' }}>
+              Copiar diagnóstico seguro
+            </button>
+          </div>
+        </details>
       )}
       {!puestoActivo && maquinaInfo?.id && (
         <div role="alert" style={{ padding: 14, marginBottom: 12,

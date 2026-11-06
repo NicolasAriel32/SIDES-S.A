@@ -1,15 +1,12 @@
 name: SPC-001 · validación de rama
 
+# Todo PR y todo cambio fusionado a main se validan.
+# No existen pasos de publicación, deploy ni migración.
 on:
   pull_request:
-    paths:
-      - 'src/App.jsx'
-      - 'src/domain/estanqueidad.js'
-      - 'tests/**/*.test.js'
-      - 'sql/spc_001_registrar_prueba_atomica_BORRADOR_NO_APLICAR.sql'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/spc-001-ci.yml'
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
