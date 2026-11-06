@@ -1,5 +1,5 @@
 import { supabase } from './supabase.js'
-import React, { useState, useMemo, useEffect, createContext, useContext } from 'react';
+import React, { useState, useMemo, useEffect, useRef, createContext, useContext } from 'react';
 import {
   Activity, AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight,
   Clock, Cpu, Database, Download, Eye, FileSearch, Filter, Fingerprint,
@@ -16,7 +16,12 @@ import {
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
 import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
-import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
+import { guardarPruebaSegura } from './api/registroSeguro.js';
+import { crearAlmacenIntentos } from './domain/intentosRegistro.js';
+import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuales.js';
+import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
+import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
+import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
 
 
 /* =================================================================
@@ -785,10 +790,11 @@ const dataService = {
     // primero en staging. Ninguna escritura debe dejar fallas parciales.
     let data, error, payload;
     try {
-      ({ data, error, payload } = await registrarPruebaEstanqueidad(supabase, test));
+      ({ data, error, payload } = await guardarPruebaSegura({
+        supabase, test, storage: localStorage, lockManager: navigator.locks,
+      }));
     } catch (e) {
-      // Errores de validación o red no deben consumir el inicio manual local.
-      this._ultimoError = e?.message || 'Fallo la conexión antes de confirmar el registro.';
+      this._ultimoError = e?.message || 'No se pudo confirmar el registro.';
       return null;
     }
     if (error || !data?.prueba_id) {
@@ -1952,6 +1958,22 @@ const VistaOperario = ({ t, user, refresh }) => {
   // v6: flag para que el auto-guardado de PENDIENTE (60 min) solo se ejecute una vez
   const [autoGuardado, setAutoGuardado] = useState(false);
   const [errorPendiente, setErrorPendiente] = useState('');
+  const [errorBorrador, setErrorBorrador] = useState('');
+  const borradorHidratado = useRef(null);
+  const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
+  const [revisionEditor, setRevisionEditor] = useState(0);
+  useEffect(() => {
+    const id = pruebaPendiente?.requestId;
+    if (!id || !pruebaPendiente?.maquina) {
+      setPermisoEditor({ requestId: null, ok: false });
+      return;
+    }
+    let vigente = true;
+    setPermisoEditor({ requestId: id, ok: false });
+    const reserva = reservarEditorExclusivo(navigator.locks, user.legajo, pruebaPendiente.maquina, id);
+    reserva.listo.then(ok => { if (vigente) setPermisoEditor({ requestId: id, ok }); });
+    return () => { vigente = false; reserva.soltar(); };
+  }, [pruebaPendiente?.requestId, pruebaPendiente?.maquina, user.legajo, revisionEditor]);
 
   // CAMBIO v4: estados para mensajes del supervisor
   const [observaciones, setObservaciones] = useState([]);
@@ -1993,16 +2015,46 @@ const VistaOperario = ({ t, user, refresh }) => {
   // v7: persistencia local de la señal del PLC — la regla de los 60 minutos
   // sigue corriendo aunque el operario recargue la página o cierre el navegador.
   const LIMITE_PENDIENTE_SEG = 3600; // 60 min
-  const claveSenal   = (maquinaId) => `senal_plc_${user.legajo}_${maquinaId}`;
-  const persistirSenal = (maquinaId, senal) => { try { localStorage.setItem(claveSenal(maquinaId), JSON.stringify(senal)); } catch {} };
-  const limpiarSenal   = (maquinaId) => { try { localStorage.removeItem(claveSenal(maquinaId)); } catch {} };
-  const leerSenal      = (maquinaId) => { try { return JSON.parse(localStorage.getItem(claveSenal(maquinaId)) || 'null'); } catch { return null; } };
+  const almacenSenales = crearAlmacenSenales(localStorage, user.legajo);
+  const almacenBorradores = crearAlmacenBorradores(localStorage, user.legajo);
+  const almacenIntentos = crearAlmacenIntentos(localStorage, user.legajo);
+  const restaurarBorrador = (senal, maquinaId) => {
+    const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
+    if (error) { setErrorBorrador(error); borradorHidratado.current = null; return; }
+    if (borrador) {
+      setTuvoFalla(borrador.tuvoFalla ?? null);
+      setTiposSeleccionados(borrador.tiposSeleccionados || []);
+      setCantidadesTipos(borrador.cantidadesTipos || {});
+      setCabezalesFalla(borrador.cabezalesFalla || 0);
+      setCodigoProducto(borrador.codigoProducto || '');
+      setCaja(borrador.caja || ''); setLote(borrador.lote || ''); setObs(borrador.obs || '');
+      setErrorBorrador('');
+    }
+    borradorHidratado.current = senal.requestId;
+  };
+  const editorActivo = permisoEditor.ok && permisoEditor.requestId === pruebaPendiente?.requestId;
+  useEffect(() => {
+    if (!editorActivo || !pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
+    const campos = { tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs };
+    if (!almacenBorradores.guardar(pruebaPendiente.maquina, pruebaPendiente.requestId, campos)) {
+      setErrorBorrador('No se pudo conservar el formulario local. No cierres esta pestaña.');
+    } else if (!errorBorrador.startsWith('Existe un borrador')) {
+      setErrorBorrador('');
+    }
+  }, [editorActivo, pruebaPendiente?.requestId, tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs]);
+  const limpiarSenal = (maquinaId, requestId) => almacenSenales.eliminarSiCoincide(maquinaId, requestId);
   const recuperarSenalConId = (maquinaId) => {
-    const guardada = leerSenal(maquinaId);
+    const { senal: guardada, error } = almacenSenales.leer(maquinaId);
+    if (error) { setErrorPendiente(error); return null; }
     if (!guardada || guardada.requestId) return guardada;
-    // Recuperar una señal local previa sin reescribir ninguna prueba histórica.
+    // No inventar un UUID para una señal ajena o con timestamp malformado.
+    if (evaluarSenalManual(guardada, maquinaId).estado === 'INVALIDA') {
+      setErrorPendiente('La señal local requiere revisión manual; no se eliminó.');
+      return null;
+    }
     const migrada = { ...guardada, requestId: crypto.randomUUID() };
-    persistirSenal(maquinaId, migrada);
+    const actualizado = almacenSenales.actualizarSiCoincide(maquinaId, migrada, null);
+    if (!actualizado.ok) { setErrorPendiente(actualizado.error); return null; }
     return migrada;
   };
 
@@ -2011,6 +2063,11 @@ const VistaOperario = ({ t, user, refresh }) => {
   // que ya superó los 60 minutos.
   const registrarPendienteAuto = async (senal, maquinaId) => {
     try {
+      const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
+      if (error || borradorTieneCarga(borrador)) {
+        setErrorBorrador(error || 'Existe un formulario iniciado. Revisalo antes de cerrar la señal.');
+        return false;
+      }
       const test = {
         ...senal,
         operario: `${user.nombre} ${user.apellido}`,
@@ -2034,7 +2091,9 @@ const VistaOperario = ({ t, user, refresh }) => {
       } catch (auditError) {
         console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
-      limpiarSenal(maquinaId);
+      limpiarSenal(maquinaId, senal.requestId);
+      almacenBorradores.borrarConfirmado(maquinaId, senal.requestId);
+      almacenIntentos.borrarConfirmado(maquinaId, senal.requestId);
       return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
@@ -2063,20 +2122,28 @@ const VistaOperario = ({ t, user, refresh }) => {
       // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
       // PENDIENTE automáticamente y el operario espera la próxima señal.
       const guardada = m?.id ? recuperarSenalConId(m.id) : null;
-      if (guardada?.fechaSenal) {
-        const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-        if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+      if (guardada) {
+        const evaluacion = evaluarSenalManual(guardada, m.id);
+        if (evaluacion.estado === 'INVALIDA') {
+          setErrorPendiente(evaluacion.motivo);
+          setPruebaPendiente(null);
+          return;
+        }
+        if (evaluacion.estado === 'VENCIDA') {
           const registrado = await registrarPendienteAuto(guardada, m.id);
           if (registrado) {
+            borradorHidratado.current = null;
             setPruebaPendiente(null);
             if (m?.id) await recalcularContador(m.id);
             refresh();
           } else {
+            restaurarBorrador(guardada, m.id);
             setPruebaPendiente(guardada);
             setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
             setAutoGuardado(true);
           }
         } else {
+          restaurarBorrador(guardada, m.id);
           setPruebaPendiente(guardada);   // el reloj sigue desde la señal original
         }
         return;
@@ -2092,6 +2159,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     const m = machinesList.find(x => x.id === id);
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
+    borradorHidratado.current = null;
     setPruebaPendiente(null);
     setAutoGuardado(false); setErrorPendiente('');
     setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
@@ -2100,39 +2168,82 @@ const VistaOperario = ({ t, user, refresh }) => {
     await recalcularContador(m.id, true);
     // restaurar señal persistida de esa máquina (si existe)
     const guardada = recuperarSenalConId(m.id);
-    if (guardada?.fechaSenal) {
-      const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-      if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+    if (guardada) {
+      const evaluacion = evaluarSenalManual(guardada, m.id);
+      if (evaluacion.estado === 'INVALIDA') {
+        setErrorPendiente(evaluacion.motivo);
+        return;
+      }
+      if (evaluacion.estado === 'VENCIDA') {
         if (!await registrarPendienteAuto(guardada, m.id)) {
+          restaurarBorrador(guardada, m.id);
           setPruebaPendiente(guardada);
           setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
           setAutoGuardado(true);
         }
-      } else setPruebaPendiente(guardada);
+      } else { restaurarBorrador(guardada, m.id); setPruebaPendiente(guardada); }
     }
   };
 
   // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
     if (!maquinaInfo?.id) return;
-    const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
-    const ahora = new Date();
-    // FIX v6: fecha del ID usa zona AR para que coincida con el día calendario local
-    const senal = {
-      id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
-      maquina: maquinaInfo.id,
-      numeroSecuencial: numeroPrueba,
-      requestId: crypto.randomUUID(),
-      fechaSenal: ahora.toISOString(),
-      fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
-    };
-    setPruebaPendiente(senal);
-    persistirSenal(maquinaInfo.id, senal);   // v7: sobrevive recargas / cierre del navegador
-    await dataService.logEvent({
-      accion: 'SIGNAL',
-      usuario: `${user.nombre} ${user.apellido}`,
-      desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
-    });
+    const maquinaId = maquinaInfo.id;
+    try {
+      // Una sola pestaña puede crear la próxima señal de este operario/máquina.
+      await conBloqueoDePrueba(navigator.locks, user.legajo, maquinaId, 'inicio-manual', async () => {
+        // Una respuesta perdida y una señal borrada accidentalmente NO deben
+        // crear un nuevo inicio silencioso mientras haya un envío anterior.
+        const anterior = almacenIntentos.leer(maquinaId);
+        if (anterior) {
+          if (anterior.version !== 1 || !anterior.requestId) {
+            setErrorBorrador('Existe un intento de envío ilegible. No se inicia otra prueba.');
+            return;
+          }
+          const confirmacion = await consultarConfirmacionPrueba(supabase, anterior.requestId);
+          if (confirmacion.estado !== 'CONFIRMADA') {
+            setErrorBorrador('Existe un envío anterior sin confirmación suficiente. Revisá el registro antes de iniciar otro.');
+            return;
+          }
+          if (!almacenIntentos.borrarConfirmado(maquinaId, anterior.requestId)) {
+            setErrorBorrador('No se pudo liberar el intento confirmado; revisá el almacenamiento.');
+            return;
+          }
+        }
+        // Nunca pisar un borrador huérfano, aunque no exista su señal inicial.
+        if (almacenBorradores.leer(maquinaId, '__sin_senal__').error) {
+          setErrorBorrador('Hay un borrador local sin señal asociada. Requiere revisión antes de continuar.');
+          return;
+        }
+        const numeroPrueba = await recalcularContador(maquinaId, true);
+        const ahora = new Date();
+        const senal = {
+          id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
+          maquina: maquinaId,
+          numeroSecuencial: numeroPrueba,
+          requestId: crypto.randomUUID(),
+          fechaSenal: ahora.toISOString(),
+          fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', {
+            hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires',
+          }),
+        };
+        const guardado = almacenSenales.guardar(maquinaId, senal);
+        if (!guardado.ok) { setErrorBorrador(guardado.error); return; }
+        setErrorBorrador('');
+        borradorHidratado.current = senal.requestId;
+        setPruebaPendiente(senal); // Sólo después de confirmar persistencia local.
+        try {
+          await dataService.logEvent({
+            accion: 'SIGNAL', usuario: `${user.nombre} ${user.apellido}`,
+            desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaId} · prueba #${numeroPrueba}`,
+          });
+        } catch (auditError) {
+          console.warn('Se conservó la señal, pero falló el log complementario:', auditError);
+        }
+      });
+    } catch (e) {
+      setErrorBorrador(e?.message || 'No se pudo reservar el inicio en este navegador.');
+    }
   };
 
   // Timer en vivo
@@ -2149,7 +2260,12 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   // v6: auto-guardar como PENDIENTE si pasan 60 min sin que el operario complete
   const autoGuardarComoPendiente = async () => {
-    if (!pruebaPendiente || autoGuardado) return;
+    if (!pruebaPendiente || autoGuardado || !editorActivo) return;
+    const { borrador, error } = almacenBorradores.leer(pruebaPendiente.maquina, pruebaPendiente.requestId);
+    if (error || borradorTieneCarga(borrador)) {
+      setErrorBorrador(error || 'Hay datos cargados. No se registró un PENDIENTE automático.');
+      return;
+    }
     setAutoGuardado(true);
     setErrorPendiente('');
     try {
@@ -2186,7 +2302,12 @@ const VistaOperario = ({ t, user, refresh }) => {
       return;
     }
     // Sólo limpiar la señal cuando la RPC confirmó el registro.
-    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);
+    if (maquinaInfo?.id) {
+      limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
+      almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+      almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+    }
+    borradorHidratado.current = null;
     setPruebaPendiente(null);
     setAutoGuardado(false);
     setErrorPendiente('');
@@ -2286,7 +2407,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const handleSubmit = async () => {
-    if (submitting) return;
+    if (submitting || !editorActivo || !pruebaPendiente?.requestId || errorBorrador) return;
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
@@ -2318,7 +2439,12 @@ const VistaOperario = ({ t, user, refresh }) => {
         return;
       }
       // La RPC y los triggers guardan la evidencia; createTest hace log complementario.
-      if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: prueba cargada → señal consumida
+      if (maquinaInfo?.id) {
+        limpiarSenal(maquinaInfo.id, pruebaPendiente.requestId);
+        almacenBorradores.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+        almacenIntentos.borrarConfirmado(maquinaInfo.id, pruebaPendiente.requestId);
+      }
+      borradorHidratado.current = null; // ACK sólo para el UUID confirmado
 
       setShowSuccess(true);
       setTimeout(async () => {
@@ -2346,6 +2472,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
+      {errorBorrador && <div role="alert" style={{ padding: 12, marginBottom: 12, border: '1px solid #c98b43', borderRadius: 8, color: t.text, background: t.surface }}>⚠️ {errorBorrador}</div>}
       {/* CAMBIO v4: Toast de nueva observación */}
       {toastObs && (
         <ToastObservacion
@@ -2522,7 +2649,7 @@ const VistaOperario = ({ t, user, refresh }) => {
                         ⚠ COMPLETÁ EL REGISTRO AHORA
                       </div>
                       <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, marginTop: 2 }}>
-                        En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} se bloqueará automáticamente y no podrás modificarlo
+                        En {formatTiempo(LIMITE_PENDIENTE_SEG - tiempoTranscurrido)} vence el plazo. Si cargaste datos, se conservarán para revisión.
                       </div>
                     </div>
                   </div>
@@ -2556,7 +2683,16 @@ const VistaOperario = ({ t, user, refresh }) => {
             </div>
           </Card>
 
+          {!editorActivo && (
+            <div role="alert" style={{ padding: 14, border: `1px solid ${t.warn}`, borderRadius: 8, marginBottom: 12, background: t.warnSoft, color: t.text }}>
+              Este registro está en modo solo lectura mientras verificamos el permiso de edición en esta pestaña. Si otra ventana lo está usando, cerrala antes de continuar.
+              <button type="button" onClick={() => setRevisionEditor(n => n + 1)} style={{ display: 'block', padding: '8px 12px', marginTop: 8, borderRadius: 6, background: t.surfaceHi, color: t.text, border: `1px solid ${t.border}`, cursor: 'pointer' }}>
+                Volver a intentar editar
+              </button>
+            </div>
+          )}
           <Card t={t} padding={28}>
+            <fieldset disabled={!editorActivo} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
             <h3 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 18, color: t.text, fontWeight: 600, marginBottom: 6 }}>
               Cargá el resultado
             </h3>
@@ -2738,6 +2874,7 @@ const VistaOperario = ({ t, user, refresh }) => {
             }}>
               {submitting ? 'Guardando...' : 'Guardar resultado'}<ChevronRight size={18} />
             </button>
+            </fieldset>
           </Card>
         </>
       )}
