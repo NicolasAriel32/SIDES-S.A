@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reservarEditorExclusivo } from '../src/domain/editorExclusivo.js';
+import { reservarEditorExclusivo, reservarPuestoMaquina } from '../src/domain/editorExclusivo.js';
 
 function locks() {
   const activos = new Set();
@@ -48,4 +48,28 @@ test('dos solicitudes diferentes usan locks independientes',async()=>{
  assert.equal(await a.listo,true);
  assert.equal(await b.listo,true);
  a.soltar();b.soltar();
+});
+
+test('el lock de máquina bloquea dos pestañas aunque tengan UUID distintos',async()=>{
+ const manager=locks();
+ const a=reservarPuestoMaquina(manager,'MAQ-010');
+ assert.equal(await a.listo,true);
+ const b=reservarPuestoMaquina(manager,'MAQ-010');
+ assert.equal(await b.listo,false);
+ b.soltar();a.soltar();
+ await new Promise(resolve=>setImmediate(resolve));
+ const c=reservarPuestoMaquina(manager,'MAQ-010');
+ assert.equal(await c.listo,true);c.soltar();
+});
+test('máquinas distintas pueden operar en paralelo',async()=>{
+ const manager=locks();
+ const a=reservarPuestoMaquina(manager,'MAQ-010');
+ const b=reservarPuestoMaquina(manager,'MAQ-011');
+ assert.equal(await a.listo,true);
+ assert.equal(await b.listo,true);
+ a.soltar();b.soltar();
+});
+test('sin Web Locks no se permite modificar una máquina',async()=>{
+ const x=reservarPuestoMaquina(null,'MAQ-010');
+ assert.equal(await x.listo,false);x.soltar();
 });
