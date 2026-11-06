@@ -72,6 +72,28 @@ de forma segura (sin escribir resultado), por lo que **NO debe desplegarse**.
 Aún falta probar autorizaciones por rol, interoperabilidad, concurrencia y
 respuesta ante corte de red.
 
+## Decisión operativa confirmada: discrepancia sin NC automática (2026-11-06)
+
+Si el encargado detecta discrepancia en una contramuestra, **solo registra
+el hallazgo físico**: qué prueba/contramuestra se seleccionó, cantidad
+encontrada, defectuosos/no defectuosos, coincidencia de caja/lote,
+observaciones, usuario y fecha. No se repite la prueba original,
+no se modifica su resultado, **no se abre ni se solicita una NC** y
+no se inicia una acción correctiva por este flujo.
+
+En `sql/VF_001_CIERRE_CONTRAMUESTRA_RPC_NO_APLICAR.sql` la RPC de cierre
+guarda `resultado='DISCREPANCIA'`, `genera_nc=false` y
+`no_conformidad_id=NULL` (también para `OK`). No hay `INSERT`
+de NC en la RPC. **No interpretar una discrepancia como NC pendiente**.
+La eventual gestión posterior se definirá en otra etapa.
+
+**Staging:** se actualizó la función interna VF-001 y se verificó con
+`pg_get_functiondef` que registra resultado, fuerza `genera_nc=false`,
+limpia vínculo NC y no inserta NC. Se comprobó que no existen triggers
+de usuario en `verificaciones_fisicas`. Esto es verificación del
+contrato instalado, **no prueba end-to-end de un cierre real con JWT**.
+Producción no fue modificada.
+
 ## Implementación tras VF-002 (todavía SIN DESPLIEGUE)
 
 - `src/App.jsx`: `asegurarVerificacionesTurnoAnterior` **ya no**
