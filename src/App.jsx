@@ -6043,14 +6043,26 @@ export default function App() {
   useEffect(() => {
     if (esModoPasillo) return undefined;
     let vigente = true;
+    let revisionAuth = 0;
+    const revisionInicial = revisionAuth;
     dataService.getCurrentUser()
-      .then(u => { if (vigente) setUser(u); })
-      .catch(() => { if (vigente) setUser(null); });
+      .then(u => {
+        // No sobrescribir un login posterior ni revivir una sesión ya cerrada.
+        if (vigente && revisionInicial === revisionAuth) {
+          setUser(actual => actual || u);
+        }
+      })
+      .catch(() => {
+        if (vigente && revisionInicial === revisionAuth) {
+          setUser(actual => actual || null);
+        }
+      });
 
-    // Cuando Supabase revoca/descarta la sesión en esta pestaña, ocultar
-    // inmediatamente cualquier pantalla de producción y conservar evidencia SPC.
+    // Cuando Supabase descarta la sesión, ocultar inmediatamente cualquier
+    // pantalla de producción, sin borrar señales ni ensayos pendientes.
     const { data: authListener } = supabase.auth.onAuthStateChange(event => {
       if (event === 'SIGNED_OUT') {
+        revisionAuth++;
         limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
         if (vigente) setUser(null);
       }
