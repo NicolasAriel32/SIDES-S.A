@@ -28,9 +28,14 @@ BACKUP_RECOVERY_PLAN.md y RESTORE_TEST_TEMPLATE.md.
 - Panel del supervisor para MAQ-010: src/components/PanelSpcPiloto.jsx.
 - Los PENDIENTE no son ensayos. Los históricos y NO_VALIDADO nunca se suman
   a una tasa de defectuosos, aunque posean cantidades aparentemente completas.
-- Requisitos de aptitud descriptiva: señal VALIDADO asignada sólo mediante
-  un futuro procedimiento autorizado de Calidad, 20 inspeccionados explícitos,
-  producto, fecha válida y coherencia de resultados/tipos/cantidades.
+- Para un **porcentaje formal de cabezales defectuosos**, el motor reserva
+  la condición técnica VALIDADO; todavía no existe procedimiento habilitado
+  para otorgarla. No se requiere ni se presume una segunda persona aprobando
+  cada ensayo. Los resultados reportados por operarios pueden seguir viéndose
+  como **conteos descriptivos de registros**, no como SPC oficial.
+- El análisis de aptitud estadística futuro deberá comprobar método de muestreo,
+  representatividad y calidad/procedencia de datos **a nivel de proceso**.
+  El control aleatorio de existencia del turno anterior NO valida los resultados.
 - Se separa por producto: no se mezclan líneas base ni porcentajes de códigos distintos.
 - Se suman cabezales defectuosos únicos, no tipos de falla como unidades.
 - Duplicados del mismo ID son excluidos. Datos incompletos nunca se usan en tasas.
@@ -62,8 +67,9 @@ BACKUP_RECOVERY_PLAN.md y RESTORE_TEST_TEMPLATE.md.
 - `null` de cabezales afectados no se convierte en cero verdadero; ensayos
   anulados se excluyen. Muestra con múltiples tipos conserva conteo único.
 - No altera `getTests` usado por paneles operativos ni la decisión de NC.
-- La marca `VALIDADO` no se establece en esta entrega. Debe depender de
-  protocolo físico aprobado y autorización server-side de Calidad.
+- La marca `VALIDADO` no se establece en esta entrega. Su uso posterior
+  requiere protocolo y criterios de calidad de datos aprobados, sin crear
+  un paso obligatorio de validación humana por ensayo.
 
 ### Consulta y autorización: observaciones de 2026-11-06
 
@@ -80,7 +86,8 @@ BACKUP_RECOVERY_PLAN.md y RESTORE_TEST_TEMPLATE.md.
 ## Riesgos de producción aún pendientes
 
 - Restauración aislada y backup externo probado.
-- Autoridad para validar estadísticas, evidencia temporal y protocolo de muestra.
+- Definición del responsable del protocolo de muestreo, evidencia temporal
+  y criterios de aptitud del conjunto de datos (sin segunda aprobación por prueba).
 - Reglas RLS/RPC probadas con usuarios de cada rol, no sólo metadatos.
 - Compatibility de frontend y migración en ventana controlada; no se han
   aplicado SQL ni migraciones a producción.
@@ -88,9 +95,21 @@ BACKUP_RECOVERY_PLAN.md y RESTORE_TEST_TEMPLATE.md.
 ## Próximas entregas
 
 1. Validar protocolo físico, muestreo, categorías y metrología con Calidad.
-2. Implementar contrato server-side de procedencia y validación de muestras.
-3. Consulta estadística paginada y de lectura limitada con RLS por rol.
+2. Diseñar contrato server-side de procedencia y criterios de aptitud
+   estadística del proceso, sin aprobación individual de cada muestra.
+3. Revisar y probar la consulta paginada actual con usuarios por rol
+   y comprobar cobertura de la fuente.
 4. Con una línea base representativa, ensayar gráficos de control y falsas alertas.
 5. Integrar Kinco/Delta únicamente con autorización y lectura OT pasiva.
 
 Decisión de despliegue: NO-GO hasta completar con evidencia PIL-01 a PIL-10.
+
+## Corrección de alcance tras confirmación de Planta
+
+No se añade una etapa de aprobación de resultados por supervisor/Calidad.
+El operario registra sin validación individual de los 20 cabezales; se prevé
+sólo una comprobación **aleatoria de existencia** de un control del turno previo
+por el encargado de sala. La cantidad y el formulario físico actualmente
+implementados no se redefinen sin confirmación adicional. Ver
+`docs/SPC-003_Auditoria_Control_Aleatorio.md`. Los archivos de SPC-003
+que exigían aprobación individual fueron revertidos antes de merge/despliegue.
