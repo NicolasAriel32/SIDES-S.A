@@ -68,6 +68,7 @@ test('faltan caja/lote o resultado inválido: bloquea', () => {
   for (const p of [
     prueba({ caja: null }), prueba({ lote: '' }),
     prueba({ resultado: 'PENDIENTE' }), prueba({ anulada: true }),
+    prueba({ anulada: null }),
     prueba({ estadoFinal: 'ANULADA' }),
     prueba({ resultado: 'OK', cabezalesDefectuosos: 2 }),
     prueba({ resultado: 'RECHAZADO', cabezalesDefectuosos: 0 }),
