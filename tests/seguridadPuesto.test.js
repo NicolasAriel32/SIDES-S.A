@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal, claveSesionAuthPorUrl } from '../src/domain/seguridadPuesto.js';
+import { verificarSesionLocal, verificarPerfilAutenticado, inventariarEvidenciaLocal, limpiarPerfilLocal, claveSesionAuthPorUrl, comprobarPerfilCompartido } from '../src/domain/seguridadPuesto.js';
 
 function memoria() {
  const m=new Map();
@@ -69,4 +69,17 @@ test('clave Auth explícita coincide con la convención del cliente Supabase ins
  assert.equal(claveSesionAuthPorUrl('https://abc123.supabase.co'),'sb-abc123-auth-token');
  assert.equal(claveSesionAuthPorUrl('http://127.0.0.1:54321'),'sb-127-auth-token');
  assert.equal(claveSesionAuthPorUrl('sin-url'),null);
+});
+
+test('aislamiento de legajo: evidencia propia se permite, evidencia ajena bloquea',()=>{
+ const claves=['spc_borrador_v1_OP1_MAQ-010','senal_plc_OP1_MAQ-011'];
+ const storage={get length(){return claves.length},key:i=>claves[i]};
+ assert.equal(comprobarPerfilCompartido(storage,'OP1').ok,true);
+ claves.push('spc_intento_v1_OP2_MAQ-010');
+ assert.equal(comprobarPerfilCompartido(storage,'OP1').motivo,'EVIDENCIA_DE_OTRO_LEGAJO');
+});
+test('aislamiento falla cerrado si no puede enumerar storage',()=>{
+ const storage={get length(){throw Error('acceso denegado')}};
+ assert.equal(comprobarPerfilCompartido(storage,'OP1').motivo,'STORAGE_INACCESIBLE');
+ assert.equal(comprobarPerfilCompartido(storage,'').ok,false);
 });
