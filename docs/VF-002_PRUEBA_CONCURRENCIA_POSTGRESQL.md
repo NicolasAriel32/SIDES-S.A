@@ -70,3 +70,67 @@ la RPC real ni ausencia de todos los deadlocks/carreras.
   parciales para `VF-LAB-20261106-ROLLBACK`.
 - Estas pruebas usan la estructura aislada `vf_concurrency_lab` y no
   sustituyen las pruebas de VF-002 definitiva con datos de staging.
+
+## Segunda revisión: RPC VF-002 definitiva aplicada en staging (2026-11-06)
+
+### Preparación del entorno
+Se ejecutaron **solo en SIDES-SPC-STAGING** las migraciones:
+- `vf_staging_nc_fk_placeholder`: crea `public.no_conformidades`
+  **únicamente como placeholder de FK**, con RLS habilitado y
+  privilegios revocados. **NO es el modelo completo de NC**.
+- `vf_staging_turnos_alignment`: agrega columnas faltantes y
+  completa las franjas M/T/N en el catálogo staging.
+- `vf_staging_traceability_schema`: ejecuta el esquema de
+  `sql/01_schema_lotes_cajas_verificaciones.sql` (lotes, cajas,
+  verificaciones y referencias de pruebas).
+- `vf_staging_contramuestra_cierre`: instala VF-001 en staging.
+- `vf_staging_asignacion_transaccional`: instala VF-002 en staging.
+
+**Producción no recibió ninguna migración.** El placeholder NC impide
+considerar staging completamente representativo del circuito NC.
+
+### Inspección de privilegios y objetos (PASS)
+- RPC `vf_asegurar_verificaciones_turno_anterior` existe, `SECURITY DEFINER`.
+- `vf_completar_contramuestra_segura` existe, `SECURITY INVOKER`.
+- `anon` sin `EXECUTE` en asignación; `authenticated` con `EXECUTE`.
+- `authenticated` sin `INSERT` ni `UPDATE` directo en VF.
+- Índice único `ux_vf_prueba_id_una_seleccion` presente.
+- Staging contiene **0 usuarios en `auth.users`**. La app usa
+  **Supabase Auth real**: `src/api/sesionPuesto.js` ejecuta
+  `signInWithPassword` y valida `usuarios.id = authUser.id`.
+
+### Prueba sobre la RPC real (PASS limitado a contexto SQL simulado)
+- Se crearon tres pruebas de **ensayo** en el turno anterior,
+  con marcador `VF-E2E-STAGING-20261106`.
+- Se ejecutaron dos transacciones simultáneas con
+  `SET LOCAL ROLE authenticated` y
+  `set_config('request.jwt.claim.sub', id_supervisor, true)`.
+  **Esto simula claims PostgreSQL; no emite ni valida JWT real.**
+- Primera RPC: `CREADA`, cantidad 2, asignada_a_mi true.
+- Segunda RPC: `YA_ASIGNADA`, cantidad 2, asignada_a_mi true.
+- Conteo final antes de limpieza: **1 ledger y 2 verificaciones**.
+- Prueba negativa de actor ausente: `insufficient_privilege`;
+  ledger continuó en 0.
+- Prueba negativa de rol operario simulada: rechazada por la RPC.
+- Se borraron únicamente los registros de prueba y su ledger;
+  comprobación posterior: **0 VF, 0 ledger, 0 fixtures**.
+
+### Revisión crítica: pendientes NO resueltos
+1. Crear usuarios **de prueba** mediante el flujo soportado de Supabase
+   Auth (sin contraseñas en SQL ni creación directa en `auth.users`),
+   enlazados a `public.usuarios.id`; validar tokens JWT y sesión de
+   navegador reales, más roles denegados y supervisor concurrente.
+2. Staging aún tiene una **tabla NC placeholder**, no el esquema NC
+   productivo. Antes de QA integral de NC, migrar el esquema auténtico
+   con backup y validar las dependencias.
+3. Probar VF-001: OK, discrepancias, exactamente 20 cabezales,
+   identidad del asignado, doble cierre y reintento.
+4. Pruebas Windows E2E, fallas de red, reintentos y rollback de despliegue.
+5. Revisar aviso del asesor de seguridad sobre funciones
+   `SECURITY DEFINER` expuestas y su alcance efectivo.
+6. Los fixtures temporales se eliminaron; el esquema y funciones
+   staging **sí permanecen** para siguientes pruebas.
+
+**Estado: migración VF-001/VF-002 en staging aplicada; concurrencia de
+RPC real con claims SQL simulados PASS; Auth/JWT real y NC completo
+PENDIENTES; producción NO-GO.**
