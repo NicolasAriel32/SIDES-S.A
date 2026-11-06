@@ -88,3 +88,20 @@ test('malformación de borrador no autoriza limpieza',()=>{
  f.storage.setItem('spc_borrador_v1_OP_MAQ-010','{corrupto');
  assert.equal(inspeccionarRegistrosLocales(f).estado,'INTERVENCION');
 });
+
+test('sin confirmación, la señal y el intento siguen disponibles para reintentar',async()=>{
+ const f=fixture();f.senales.guardar(maquinaId,senal);
+ f.intentos.preparar(maquinaId,requestId,payload);
+ const r=await recuperarEstadoLocal({...f,consultar:async()=>({estado:'NO_ENCONTRADA'})});
+ assert.equal(r.estado,'ENVIO_PREVIO');
+ assert.equal(f.senales.leer(maquinaId).senal.requestId,requestId);
+ assert.equal(f.intentos.leer(maquinaId).requestId,requestId);
+});
+test('no limpia si falla la eliminación de la señal',()=>{
+ const f=fixture();f.senales.guardar(maquinaId,senal);
+ f.intentos.preparar(maquinaId,requestId,payload);
+ f.storage.removeItem=()=>{throw Error('bloqueado')};
+ const r=limpiarTrasConfirmacion({...f,requestId,pruebaId:'db-123'});
+ assert.equal(r.estado,'CONFIRMADA_CON_RESIDUOS');
+ assert.equal(f.intentos.leer(maquinaId).requestId,requestId);
+});
