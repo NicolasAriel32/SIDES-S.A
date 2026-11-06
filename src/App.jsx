@@ -527,7 +527,7 @@ const dataService = {
       .order('fecha_seleccion', { ascending: true })
 
     console.log('getVerificacionesPendientes response:', { data, error })
-    if (error) { console.error('getVerificacionesPendientes:', error); return [] }
+    if (error) { console.error('getVerificacionesPendientes: fallo de lectura'); throw new Error('VF_LECTURA_FALLIDA') }
 
     const usuariosMap = await this.getUsersCache()
     return (data || []).map(v => {
@@ -3738,6 +3738,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // Verificaciones físicas del turno anterior (anti-fraude)
   const [verifPendientes, setVerifPendientes] = useState([]);
   const [mostrarVerif, setMostrarVerif] = useState(false);
+  const [errorVerificaciones, setErrorVerificaciones] = useState(false);
   const [mostrarFormNC, setMostrarFormNC] = useState(false);
   const [ncCajaDesde, setNcCajaDesde] = useState('');
   const [ncCantidadCajas, setNcCantidadCajas] = useState('');
@@ -3745,13 +3746,26 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const [decisionLoading, setDecisionLoading] = useState(false);
   const [decisionError, setDecisionError] = useState('');
 
+  const actualizarVerificaciones = async () => {
+    try {
+      const pendientes = await dataService.getVerificacionesPendientes();
+      setVerifPendientes(pendientes);
+      setErrorVerificaciones(false);
+      return pendientes;
+    } catch {
+      setErrorVerificaciones(true);
+      // Nunca reemplazar un error por lista vacía («sin verificaciones»).
+      return null;
+    }
+  };
+
   const reload = async () => {
     setMachines(await dataService.getMachines());
     // FIX v7: solo trae pruebas del turno activo para que el turno noche
     // no mezcle registros del día anterior al cruzar la medianoche.
     setTests(await dataService.getTests(inicioTurnoActual()));
     setUnreadObs(await dataService.getAllUnreadObservations());
-    setVerifPendientes(await dataService.getVerificacionesPendientes());
+    await actualizarVerificaciones();
   };
 
   useEffect(() => {
@@ -3769,9 +3783,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
         await dataService.asegurarVerificacionesTurnoAnterior(
           null, currentUser?.legajo, currentUser?.nombre
         );
-        const pend = await dataService.getVerificacionesPendientes();
-        if (!cancelado) {
-          setVerifPendientes(pend);
+        const pend = await actualizarVerificaciones();
+        if (!cancelado && pend) {
           if (pend.length > 0) setMostrarVerif(true);
         }
       } catch (e) {
@@ -4044,6 +4057,17 @@ const VistaSupervisor = ({ t, currentUser }) => {
         </div>
       )}
 
+      {errorVerificaciones && (
+        <div role="alert" style={{
+          padding: 12, border: '1px solid ' + t.border, borderRadius: 6,
+          fontFamily: 'Manrope', fontSize: 12, color: t.warn, marginBottom: 12,
+        }}>
+          No fue posible consultar las verificaciones del turno anterior.
+          No se puede afirmar que no haya verificaciones pendientes.
+          Revisá la conectividad y el esquema de la base.
+        </div>
+      )}
+
       {mostrarVerif && verifPendientes.length > 0 && (
         <ModalVerificacionFisica
           t={t}
@@ -4051,12 +4075,11 @@ const VistaSupervisor = ({ t, currentUser }) => {
           verificaciones={verifPendientes}
           onClose={async () => {
             setMostrarVerif(false);
-            setVerifPendientes(await dataService.getVerificacionesPendientes());
+            await actualizarVerificaciones();
           }}
           onDone={async () => {
-            const pend = await dataService.getVerificacionesPendientes();
-            setVerifPendientes(pend);
-            setMostrarVerif(false);
+            const pend = await actualizarVerificaciones();
+            if (pend) setMostrarVerif(false);
           }}
         />
       )}
