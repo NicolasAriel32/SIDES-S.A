@@ -21,3 +21,38 @@
 
 ## Criterio de aceptación de código
 `npm test` y `npm run build` pasan en CI; PR de Fase 4 queda abierto hasta revisión. La certificación de operación real se realizará sobre preview aislado.
+
+
+## Revisión técnica doble — 2026-11-06
+
+### Pasada 1: identidad y autorización
+- Corregida la selección del perfil que antes buscaba sólo `legajo`; ahora exige `usuarios.id = auth.getUser().id`, legajo solicitado y `activo = true`.
+- La restauración consulta `auth.getUser()` **y vuelve a leer el perfil actual** con RLS; no reutiliza roles, máquinas ni `fuerza_cambio` del perfil guardado sin validación.
+- Corregido el cambio de contraseña que perdía `authUserId` al reescribir `sessionStorage`.
+- Login y cambio de contraseña distinguen errores de Auth, metadatos y auditoría; ningún log complementario habilita una identidad no verificada.
+- Consultas de sólo lectura en SIDES producción: 7 perfiles, los 7 con UID vinculado a Auth, estado activo definido y roles admitidos. **Sin cambiar tablas ni filas.**
+- En el staging sintético los perfiles no están aún enlazados a cuentas Auth reales: el E2E de autenticación sigue bloqueado hasta preparar credenciales de prueba.
+
+### Pasada 2: seguridad y concurrencia de estación compartida
+- Extraído `src/api/sesionPuesto.js` para probar las rutas de login, recarga, password y logout con dobles de Auth y PostgREST; `src/domain/seguridadPuesto.js` define el contrato de perfil/UID.
+- En logout, se descartan el perfil de UI y el token persistido local; se emplea la clave de sesión predeterminada por el proyecto Supabase para no dejar una sesión legada sin limpiar.
+- La eliminación local del token **no revoca por sí sola los access tokens existentes**, que siguen válidos hasta su vencimiento en servidor. El resultado remoto sigue siendo un riesgo que requiere validación en navegador.
+- La UI escucha `SIGNED_OUT` y se oculta; el regreso al foco revalida el perfil contra Supabase. Una revisión de sesión tardía no puede reabrir una identidad después de logout o de otro login.
+- Durante el logout se oculta la UI inmediatamente y el siguiente login queda bloqueado hasta completar el cierre. La evidencia de pruebas continúa intacta.
+- Se mantienen las advertencias antes de cerrar sesión si hay señales, borradores o intentos locales pendientes; no se realiza borrado general de `localStorage`.
+
+### Evidencia automatizada
+- GitHub Actions: `npm test` **99 pruebas aprobadas, 0 fallos** y `npm run build` completo sobre la rama de Fase 4, ejecución [42161000493](https://github.com/NicolasAriel32/SIDES-S.A/actions/runs/42161000493).
+- Las pruebas con dobles verifican UID, legajo, rol, estado activo, almacenamiento denegado, revocación lógica en recarga, cambio de contraseña, cierre offline y preservación de trazabilidad.
+- Estas ejecuciones **no sustituyen** pruebas E2E reales de Chrome/Edge, Auth HTTP, múltiples pestañas ni corte físico de conexión.
+
+### Riesgos que siguen abiertos
+1. La persistencia en `localStorage` sigue siendo compartida por el mismo perfil Windows/navegador y no está cifrada; **no** se garantiza privacidad frente a otra persona con acceso al mismo perfil de Windows ni a DevTools.
+2. No hay revocación inmediata de access tokens emitidos ni una política de inactividad aprobada por Planta; deberá acordarse con seguridad/operaciones.
+3. La revalidación al recuperar foco puede bloquear a un operario durante una desconexión: se conserva la evidencia local y será necesario reautenticar al volver la red.
+4. En caso de falla entre Auth y `marcar_password_cambiada`, la contraseña pudo cambiar sin actualizar `fuerza_cambio`; la UI informa de esa incertidumbre, sin afirmar éxito.
+5. Antes de desplegar se deberá verificar en navegador real que el logout con red caída no conserva una sesión reutilizable en memoria, ni reabre pantallas por respuestas tardías.
+6. Cambios Fase 4 permanecen sólo en rama/PR de borrador. No se ejecutó despliegue ni migración de BD.
+
+## Decisión
+**No fusionar Fase 4 a `main` todavía.** Completar revisión y ejecutar QA de navegador al preparar un preview aislado; la compilación y los tests de CI no equivalen a certificación de planta.
