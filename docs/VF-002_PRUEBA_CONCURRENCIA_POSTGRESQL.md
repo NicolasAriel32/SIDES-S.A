@@ -134,3 +134,50 @@ considerar staging completamente representativo del circuito NC.
 **Estado: migración VF-001/VF-002 en staging aplicada; concurrencia de
 RPC real con claims SQL simulados PASS; Auth/JWT real y NC completo
 PENDIENTES; producción NO-GO.**
+
+## Fase 6: pruebas de cierre VF-001 con RPC real (2026-11-06)
+
+**Método:** se creó una prueba sintética y su VF en una transacción
+`BEGIN ... ROLLBACK` en staging. Se invocó la RPC instalada
+`vf_completar_contramuestra_segura` bajo
+`SET LOCAL ROLE authenticated` y `request.jwt.claim.sub` simulado.
+**No se generaron tokens JWT reales ni se tocaron datos productivos.**
+
+Resultados observados:
+- 19 muestras, 0 defectuosas, caja/lote coincidentes:
+  `DISCREPANCIA`, `duplicado=false`, 19 sin defectos.
+- Persistencia antes del rollback:
+  `resultado=DISCREPANCIA`, `genera_nc=false`,
+  `no_conformidad_id=NULL`. No se abrió NC.
+- Repetición exacta del cierre:
+  `DISCREPANCIA`, `duplicado=true` (idempotencia).
+- 20 muestras, 0 defectuosas, caja/lote coincidentes:
+  `OK`, `duplicado=false`.
+- Actor de rol `operario`:
+  RPC rechazada (`SQLSTATE P0001`).
+- Todos los fixtures de cierre fueron **revertidos con ROLLBACK**.
+
+**Segunda revisión:** se inspeccionó el contrato frontend
+`src/api/cierreContramuestra.js`: el cliente no puede determinar
+por sí mismo `OK`/`DISCREPANCIA`; exige que la RPC retorne
+el mismo ID y cantidades enviadas. La RPC compara contra la prueba
+original en el servidor. La función instalada fue verificada después
+de la regla de no generar NC.
+
+### Puertas que impiden fusión a main
+- Staging no tiene cuentas en `auth.users` y la herramienta disponible
+  no ofrece el flujo administrativo de alta de usuarios de Auth.
+  **No se ha probado** `signInWithPassword`, JWT emitido por Auth,
+  expiración, revocación, RLS desde cliente ni doble sesión real.
+- Sigue pendiente prueba integral de navegador/desktop y recuperación
+  ante red intermitente, explícitamente reservada para Windows.
+- La tabla `no_conformidades` de staging es un placeholder de FK;
+  **no** valida el módulo de NC general. Según decisión operativa,
+  la discrepancia física no necesita abrir NC.
+- Requiere plan probado de rollback/backup de producción, validación
+  de clientes legados, y revisión de seguridad final.
+- El CI de GitHub no reemplaza las pruebas Auth/E2E.
+
+**Dictamen:** cierre VF-001 y asignación VF-002 tienen pruebas SQL
+satisfactorias con claims simulados, pero **NO-GO para fusionar PR #7**
+hasta cumplir las puertas restantes. No confundir test SQL con Auth real.
