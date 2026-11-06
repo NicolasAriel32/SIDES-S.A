@@ -22,6 +22,7 @@ import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuale
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
 import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
+import { verificarSesionLocal, inventariarEvidenciaLocal, limpiarPerfilLocal } from './domain/seguridadPuesto.js';
 import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 
 
@@ -350,27 +351,37 @@ const dataService = {
     if (!data) { console.log('login: perfil no encontrado en usuarios'); return null }
     if (data.activo === false) { console.log('login: usuario inactivo'); return null }
 
-    const user = mapUserFromDb(data)
+    const user = { ...mapUserFromDb(data), authUserId: authData.user.id }
     sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user))
     console.log('login: éxito', { legajo: user.legajo, rol: user.rol })
     return user
   },
 
   async logout() {
-    await supabase.auth.signOut()
-    sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
-    console.log('logout: sesión cerrada')
+    // El perfil se borra aunque Auth no responda; la evidencia SPC no se toca.
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) throw error
+    } finally {
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
+    }
   },
 
   async getCurrentUser() {
-    // Verificar que siga habiendo sesión activa en Supabase Auth
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) {
-      sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER)
+    // getUser valida identidad contra Supabase Auth; getSession solo lee el token local.
+    let authUser = null
+    try {
+      const { data, error } = await supabase.auth.getUser()
+      if (!error) authUser = data?.user
+    } catch { /* Sin verificación no se reutiliza el perfil anterior. */ }
+    const validacion = verificarSesionLocal({
+      storage: sessionStorage, claveUsuario: STORAGE_KEYS.CURRENT_USER, authUser,
+    })
+    if (!validacion.ok) {
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER)
       return null
     }
-    const stored = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER)
-    return stored ? JSON.parse(stored) : null
+    return validacion.usuario
   },
 
   async changePassword(legajo, newPass) {
@@ -6074,9 +6085,20 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
-    await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
-    await dataService.logout();
-    setUser(null);
+    // Un log de auditoría complementario no puede impedir el cierre local.
+    try {
+      await dataService.logEvent({ accion: 'LOGOUT', usuario: `${user.nombre} ${user.apellido}`, desc: 'Cierre de sesión' });
+    } catch (e) {
+      console.warn('No se pudo registrar el log complementario de cierre:', e);
+    }
+    try {
+      await dataService.logout();
+    } catch (e) {
+      console.warn('Falló el cierre remoto; no se reutilizará el perfil local:', e);
+    } finally {
+      limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
+      setUser(null);
+    }
   };
 
   if (esModoPasillo) {
