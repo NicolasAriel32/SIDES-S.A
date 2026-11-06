@@ -87,7 +87,7 @@ test('contrato SQL: ledger de turno, bloqueo transaccional y unicidad doble',()=
   assert.match(sql,/ORDER BY pg_catalog\.random\(\)\s+LIMIT 2/i);
   assert.match(sql,/LEGADO_EXISTENTE/i);
   assert.match(sql,/SIN_PRUEBAS/i);
-  assert.match(sql,/RLS/i);
+  assert.match(sql,/ALTER TABLE public\.vf_asignaciones_turno ENABLE ROW LEVEL SECURITY/i);
 });
 
 test('el frontend no vuelve a insertar asignaciones directamente',()=>{
