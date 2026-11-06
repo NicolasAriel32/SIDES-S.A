@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js'
+import { supabase, AUTH_STORAGE_KEY } from './supabase.js'
 import React, { useState, useMemo, useEffect, useRef, createContext, useContext } from 'react';
 import {
   Activity, AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight,
@@ -330,6 +330,7 @@ const dataService = {
   async login(legajo, password) {
     return iniciarSesionPuesto({
       supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb, legajo, password,
     });
   },
@@ -337,12 +338,14 @@ const dataService = {
   async logout() {
     return cerrarSesionPuesto({
       supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      authKey: AUTH_STORAGE_KEY,
     });
   },
 
   async getCurrentUser() {
     return restaurarSesionPuesto({
       supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb,
     });
   },
@@ -350,6 +353,7 @@ const dataService = {
   async changePassword(legajo, newPass) {
     return cambiarPasswordPuesto({
       supabase, storage: sessionStorage, key: STORAGE_KEYS.CURRENT_USER,
+      authKey: AUTH_STORAGE_KEY,
       mapUser: mapUserFromDb, legajo, newPass,
     });
   },
