@@ -11,6 +11,10 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
+// Key explícita: permite borrar la sesión persistida aunque Auth falle offline.
+// La transición obliga a un nuevo login tras aplicar la futura versión.
+export const AUTH_STORAGE_KEY = 'spc001-auth-session-v1'
+
 if (!supabaseUrl || !supabaseAnonKey) {
   // Mensaje claro en consola cuando faltan las variables
   // (la app igualmente "monta", pero todas las consultas fallarán)
@@ -25,6 +29,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    storageKey: AUTH_STORAGE_KEY,
     // v7: la sesión de Auth vive en sessionStorage (por pestaña) en lugar de
     // localStorage (compartido). Antes, al abrir dos pestañas con usuarios
     // distintos (p.ej. operario + supervisor), la última pisaba la sesión de
