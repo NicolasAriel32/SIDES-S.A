@@ -16,12 +16,21 @@ export async function conBloqueoDePrueba(lockManager, legajo, maquina, requestId
 
 // Consultar por UUID antes de reenviar si el resultado previo fue ambiguo.
 // Sólo se puede afirmar "no encontrada" cuando la lectura está autorizada y fue exitosa.
-export async function consultarConfirmacionPrueba(cliente, requestId) {
+export async function consultarConfirmacionPrueba(cliente, requestId, identidad = null) {
   if (!requestId) return { estado: 'INCIERTO', motivo: 'UUID ausente' };
   try {
-    const { data, error } = await cliente.from('pruebas')
+    let consulta = cliente.from('pruebas')
       .select('id,numero_secuencial,spc_request_id')
-      .eq('spc_request_id', requestId).maybeSingle();
+      .eq('spc_request_id', requestId);
+    // Una prueba de otro operario de la misma máquina puede ser visible por RLS.
+    // No debe confundirse con el ACK de quien inició la solicitud.
+    if (identidad !== null) {
+      if (!identidad.legajo || !identidad.maquina) {
+        return { estado: 'INCIERTO', motivo: 'Identidad insuficiente para reconciliar' };
+      }
+      consulta = consulta.eq('operario_legajo', identidad.legajo).eq('id_maquina', identidad.maquina);
+    }
+    const { data, error } = await consulta.maybeSingle();
     if (error) return { estado: 'INCIERTO', motivo: error.message };
     if (!data) return { estado: 'NO_ENCONTRADA' };
     return { estado: 'CONFIRMADA', pruebaId: data.id, numeroSecuencial: data.numero_secuencial };
