@@ -44,3 +44,11 @@ test('un registro local corrupto jamás se reemplaza automáticamente',()=>{
  assert.throws(()=>a.preparar('MAQ-010','uuid-a',payload),/no se puede leer el intento anterior/i);
  assert.equal(s.getItem('spc_intento_v1_OP1_MAQ-010'),'{bad');
 });
+
+test('JSON válido pero null no borra ni reemplaza un intento',()=>{
+ const s=almacen();s.setItem('spc_intento_v1_OP1_MAQ-010','null');
+ const a=crearAlmacenIntentos(s,'OP1');
+ assert.match(a.leer('MAQ-010').error,/inválido/i);
+ assert.throws(()=>a.preparar('MAQ-010','uuid-a',payload),/envío previo diferente/i);
+ assert.equal(s.getItem('spc_intento_v1_OP1_MAQ-010'),'null');
+});
