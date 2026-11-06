@@ -48,6 +48,16 @@ export function verificarEscrituraStorage(storage, crearId) {
   }
 }
 
+// Un resultado asíncrono de otra máquina nunca demuestra que la actual
+// fue inspeccionada. Se usa el mismo criterio en la UI y los tests.
+export function estadoPreflightPorMaquina(recuperacion, maquinaId) {
+  if (!maquinaId || !recuperacion || recuperacion.maquinaId !== maquinaId) {
+    return 'SIN_VERIFICAR';
+  }
+  return typeof recuperacion.estado === 'string' && Object.hasOwn(CODIGOS, recuperacion.estado)
+    ? recuperacion.estado : 'SIN_VERIFICAR';
+}
+
 export function evaluarPreflight({
   estadoLocal = 'SIN_VERIFICAR', tieneLock, authVerificada,
   storageDisponible, navegadorSeguro, online,
