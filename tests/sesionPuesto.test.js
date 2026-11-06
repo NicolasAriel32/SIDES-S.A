@@ -19,6 +19,7 @@ function storage() {
  const db=new Map();
  return {getItem:k=>db.has(k)?db.get(k):null,
    setItem:(k,v)=>db.set(k,v),removeItem:k=>db.delete(k),
+   get length(){return db.size},key:i=>Array.from(db.keys())[i]??null,
    db};
 }
 function fake({profile=perfilInicial,authed=true,loginError=null,authError=null,rpcError=null,signOutError=null}={}) {
