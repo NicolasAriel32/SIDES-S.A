@@ -5,6 +5,7 @@ import {
 } from '../src/api/sesionPuesto.js';
 
 const KEY='tz_current_user';
+const AUTH_KEY='spc001-auth-session-v1';
 const UID='11111111-1111-4111-8111-111111111111';
 const perfilInicial={
   id:UID,legajo:'OP1',nombre:'Operario',apellido:'Prueba',
@@ -49,7 +50,7 @@ function fake({profile=perfilInicial,authed=true,loginError=null,authError=null,
  };
  return {supabase,calls,setProfile:x=>{current=x}};
 }
-const params=(f,s)=>({supabase:f.supabase,storage:s,key:KEY,mapUser});
+const params=(f,s)=>({supabase:f.supabase,storage:s,key:KEY,authKey:AUTH_KEY,mapUser});
 test('login exige ID Auth y legajo, no concede un perfil visible de supervisor',async()=>{
  const s=storage(),f=fake();
  const u=await iniciarSesionPuesto({...params(f,s),legajo:' OP1 ',password:'correcta'});
@@ -129,9 +130,31 @@ test('un error al marcar metadata no anuncia cambio completo',async()=>{
 });
 test('logout limpia perfil aunque signOut devuelva error, sin borrar trazabilidad',async()=>{
  const s=storage(),f=fake({signOutError:{message:'sin red'}});
- s.setItem(KEY,'{}');s.setItem('spc_intento_v1_OP1_MAQ-010','{}');
+ s.setItem(KEY,'{}');s.setItem(AUTH_KEY,'auth-token-sintetico');s.setItem('spc_intento_v1_OP1_MAQ-010','{}');
  await assert.rejects(cerrarSesionPuesto({...params(f,s)}),err=>err?.message==='sin red');
  assert.equal(s.getItem(KEY),null);
+ assert.equal(s.getItem(AUTH_KEY),null);
  assert.ok(s.getItem('spc_intento_v1_OP1_MAQ-010'));
  assert.deepEqual(f.calls.signOut,[{scope:'local'}]);
+});
+
+test('un perfil rechazado elimina token Auth persistido sin tocar pruebas',async()=>{
+ const s=storage(),f=fake({profile:{...perfilInicial,activo:false}});
+ s.setItem(AUTH_KEY,'token-fake');
+ s.setItem('spc_borrador_v1_OP1_MAQ-010','evidencia');
+ const u=await iniciarSesionPuesto({...params(f,s),legajo:'OP1',password:'x'});
+ assert.equal(u,null);
+ assert.equal(s.getItem(AUTH_KEY),null);
+ assert.equal(s.getItem('spc_borrador_v1_OP1_MAQ-010'),'evidencia');
+});
+test('fallo de red al verificar sesión descarta solo token y perfil',async()=>{
+ const s=storage(),f=fake();
+ await iniciarSesionPuesto({...params(f,s),legajo:'OP1',password:'x'});
+ s.setItem(AUTH_KEY,'token-fake');
+ s.setItem('senal_plc_OP1_MAQ-010','senal');
+ f.supabase.auth.getUser=async()=>{throw Error('offline')};
+ assert.equal(await restaurarSesionPuesto(params(f,s)),null);
+ assert.equal(s.getItem(AUTH_KEY),null);
+ assert.equal(s.getItem(KEY),null);
+ assert.equal(s.getItem('senal_plc_OP1_MAQ-010'),'senal');
 });
