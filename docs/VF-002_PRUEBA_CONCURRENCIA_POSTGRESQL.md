@@ -33,10 +33,14 @@ la RPC real ni ausencia de todos los deadlocks/carreras.
 ## Hallazgos adicionales antes de aplicar VF-002
 
 1. La RPC de VF-002 autoriza con `auth.uid() = usuarios.id`.
-   El frontend actual tiene login propio basado en `legajo` y no se
-   observó `supabase.auth.signInWithPassword` en `src/App.jsx`.
-   **Hay que verificar identidad Auth de extremo a extremo**; no
-   reemplazarla por un `legajo` enviado por el navegador.
+   **Corrección de segunda revisión:** el login real SÍ usa Supabase Auth:
+   `src/api/sesionPuesto.js` llama `supabase.auth.signInWithPassword`,
+   luego consulta `usuarios.id = authUser.id` y verifica perfil activo.
+   La búsqueda previa solo en `App.jsx` produjo una conclusión errónea.
+   La estructura de autenticación es compatible, pero staging tiene
+   **0 filas en `auth.users`** y 5 perfiles en `usuarios`: no es posible
+   probar login real ni una RPC autenticada sin aprovisionar usuarios
+   de prueba enlazados correctamente.
 2. VF-002 usa `pruebas.created_at` sin zona con interpretación UTC.
    Confirmar procedencia y uso en turno nocturno con datos reales.
 3. El script revoca `INSERT` directo en VF; migración y frontend
