@@ -73,10 +73,28 @@ BEGIN
   -- Bloqueo de una sola verificación: evita doble cierre concurrente.
   SELECT * INTO v_vf FROM public.verificaciones_fisicas
     WHERE id=p_verificacion_id FOR UPDATE;
-  IF NOT FOUND OR v_vf.resultado IS DISTINCT FROM 'PENDIENTE'
-     OR v_vf.supervisor_asignado_id IS DISTINCT FROM auth.uid()
-  THEN
-    RAISE EXCEPTION 'Verificacion no pendiente o no asignada';
+  IF NOT FOUND OR v_vf.supervisor_asignado_id IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Verificacion no existente o no asignada';
+  END IF;
+  -- Idempotencia frente a reintento por respuesta de red perdida:
+  -- sólo devuelve el resultado anterior si el MISMO usuario asignado
+  -- envía EXACTAMENTE el mismo hallazgo físico, sin reescritura ni auditoría duplicada.
+  IF v_vf.resultado IS DISTINCT FROM 'PENDIENTE' THEN
+    IF v_vf.resultado IN ('OK','DISCREPANCIA')
+       AND v_vf.muestras_presentes IS NOT DISTINCT FROM p_muestras_presentes
+       AND v_vf.cantidad_encontrada IS NOT DISTINCT FROM p_cantidad_encontrada
+       AND v_vf.cantidad_defectuosos_encontrada IS NOT DISTINCT FROM p_defectuosos_encontrados
+       AND v_vf.coincide_etiqueta_lote IS NOT DISTINCT FROM p_coincide_etiqueta_lote
+       AND v_vf.coincide_caja IS NOT DISTINCT FROM p_coincide_caja
+       AND v_vf.observaciones IS NOT DISTINCT FROM NULLIF(btrim(p_observaciones),'')
+    THEN
+      RETURN jsonb_build_object('verificacion_id', v_vf.id,
+        'resultado', v_vf.resultado, 'duplicado', true,
+        'cantidad_encontrada', v_vf.cantidad_encontrada,
+        'defectuosos_encontrados', v_vf.cantidad_defectuosos_encontrada,
+        'sin_defectos_encontrados', v_vf.cantidad_sin_defectos_encontrada);
+    END IF;
+    RAISE EXCEPTION 'Verificacion ya finalizada con otro contenido';
   END IF;
 
   -- Relectura y bloqueo de la prueba original; no aceptar totales
@@ -125,6 +143,7 @@ BEGIN
 
   RETURN jsonb_build_object(
     'verificacion_id',v_vf.id, 'resultado',v_resultado,
+    'duplicado', false,
     'cantidad_encontrada',p_cantidad_encontrada,
     'defectuosos_encontrados',p_defectuosos_encontrados,
     'sin_defectos_encontrados',v_sin_defectos
