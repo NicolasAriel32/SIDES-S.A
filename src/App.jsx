@@ -22,6 +22,7 @@ import { crearAlmacenSenales, evaluarSenalManual } from './domain/senalesManuale
 import { crearAlmacenBorradores, borradorTieneCarga } from './domain/borradorEstanqueidad.js';
 import { conBloqueoDePrueba, consultarConfirmacionPrueba } from './domain/reconciliacionPruebas.js';
 import { reservarEditorExclusivo } from './domain/editorExclusivo.js';
+import { recuperarEstadoLocal, limpiarTrasConfirmacion } from './domain/recuperacionLocal.js';
 
 
 /* =================================================================
@@ -1959,6 +1960,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [autoGuardado, setAutoGuardado] = useState(false);
   const [errorPendiente, setErrorPendiente] = useState('');
   const [errorBorrador, setErrorBorrador] = useState('');
+  const [estadoRecuperacion, setEstadoRecuperacion] = useState(null);
   const borradorHidratado = useRef(null);
   const [permisoEditor, setPermisoEditor] = useState({ requestId: null, ok: false });
   const [revisionEditor, setRevisionEditor] = useState(0);
@@ -2018,6 +2020,33 @@ const VistaOperario = ({ t, user, refresh }) => {
   const almacenSenales = crearAlmacenSenales(localStorage, user.legajo);
   const almacenBorradores = crearAlmacenBorradores(localStorage, user.legajo);
   const almacenIntentos = crearAlmacenIntentos(localStorage, user.legajo);
+
+  const limpiarConfirmado = (maquinaId, requestId, pruebaId) => {
+    const estado = limpiarTrasConfirmacion({
+      maquinaId, requestId, pruebaId,
+      senales: almacenSenales, borradores: almacenBorradores, intentos: almacenIntentos,
+    });
+    setEstadoRecuperacion(estado);
+    if (estado.estado !== 'CONFIRMADA_LIMPIA') {
+      setErrorBorrador(estado.mensaje || 'La prueba quedó confirmada, pero hay datos locales pendientes de revisar.');
+    }
+    return estado;
+  };
+  const revisarEstadoLocal = async maquinaId => {
+    const estado = await recuperarEstadoLocal({
+      maquinaId, senales: almacenSenales, borradores: almacenBorradores,
+      intentos: almacenIntentos,
+      consultar: requestId => consultarConfirmacionPrueba(supabase, requestId,
+        { legajo: user.legajo, maquina: maquinaId }),
+    });
+    setEstadoRecuperacion(estado);
+    if (['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estado.estado)) {
+      setErrorBorrador(estado.mensaje || 'Hay datos locales que necesitan revisión.');
+    } else if (estado.estado === 'LIBRE' || estado.estado === 'CONFIRMADA_LIMPIA') {
+      setErrorBorrador('');
+    }
+    return estado;
+  };
   const restaurarBorrador = (senal, maquinaId) => {
     const { borrador, error } = almacenBorradores.leer(maquinaId, senal.requestId);
     if (error) { setErrorBorrador(error); borradorHidratado.current = null; return; }
@@ -2032,7 +2061,9 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
-  const editorActivo = permisoEditor.ok && permisoEditor.requestId === pruebaPendiente?.requestId;
+  const editorActivo = permisoEditor.ok &&
+    permisoEditor.requestId === pruebaPendiente?.requestId &&
+    !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
   useEffect(() => {
     if (!editorActivo || !pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
     const campos = { tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs };
@@ -2042,7 +2073,6 @@ const VistaOperario = ({ t, user, refresh }) => {
       setErrorBorrador('');
     }
   }, [editorActivo, pruebaPendiente?.requestId, tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs]);
-  const limpiarSenal = (maquinaId, requestId) => almacenSenales.eliminarSiCoincide(maquinaId, requestId);
   const recuperarSenalConId = (maquinaId) => {
     const { senal: guardada, error } = almacenSenales.leer(maquinaId);
     if (error) { setErrorPendiente(error); return null; }
