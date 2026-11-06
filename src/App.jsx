@@ -2077,6 +2077,11 @@ const VistaOperario = ({ t, user, refresh }) => {
       consultar: requestId => consultarConfirmacionPrueba(supabase, requestId,
         { legajo: user.legajo, maquina: maquinaId }),
     });
+    // No sobrescribir avisos ni estados de la máquina actual con respuestas
+    // tardías recibidas después de liberar su bloqueo exclusivo.
+    if (permisoPuestoRef.current !== maquinaId) return {
+      estado: 'INCIERTO', mensaje: 'La máquina cambió durante la consulta.',
+    };
     setEstadoRecuperacion({ ...estado, maquinaId });
     if (['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estado.estado)) {
       setErrorBorrador(estado.mensaje || 'Hay datos locales que necesitan revisión.');
@@ -2098,11 +2103,14 @@ const VistaOperario = ({ t, user, refresh }) => {
     }
     borradorHidratado.current = senal.requestId;
   };
+  // La consulta del servidor puede finalizar después de cambiar de máquina.
+  // Nunca presentar, reintentar ni usar para edición el estado de otro puesto.
+  const estadoActualPuesto = estadoRecuperacion?.maquinaId === maquinaInfo?.id
+    ? estadoRecuperacion : null;
   const preflightPuesto = evaluarPreflight({
     // No afirmar que una máquina está libre antes de reconciliar su evidencia.
     // El estado de otra máquina tampoco autoriza nuevas pruebas en la actual.
-    estadoLocal: estadoRecuperacion?.maquinaId === maquinaInfo?.id
-      ? estadoRecuperacion.estado : 'SIN_VERIFICAR',
+    estadoLocal: estadoActualPuesto?.estado || 'SIN_VERIFICAR',
     tieneLock: puestoActivo,
     authVerificada: Boolean(user?.authUserId),
     storageDisponible: escrituraLocalVerificada,
@@ -2122,7 +2130,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
   const editorActivo = puestoActivo && permisoEditor.ok &&
     permisoEditor.requestId === pruebaPendiente?.requestId &&
-    !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion?.estado);
+    !['INTERVENCION', 'INCIERTO', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoActualPuesto?.estado);
   useEffect(() => {
     if (!editorActivo || !pruebaPendiente?.requestId || borradorHidratado.current !== pruebaPendiente.requestId) return;
     const campos = { tuvoFalla, tiposSeleccionados, cantidadesTipos, cabezalesFalla, codigoProducto, caja, lote, obs };
@@ -2203,6 +2211,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!maquinaId || permisoPuestoRef.current !== maquinaId) return;
     recuperarSenalConId(maquinaId); // Migración conservadora de una señal antigua.
     const revision = await revisarEstadoLocal(maquinaId);
+    if (permisoPuestoRef.current !== maquinaId) return;
     if (revision.estado === 'CONFIRMADA_LIMPIA') {
       borradorHidratado.current = null;
       setPruebaPendiente(null);
@@ -2560,21 +2569,21 @@ const VistaOperario = ({ t, user, refresh }) => {
   // Recupera el payload original de un envío anterior sin reconstruirlo
   // desde campos que pudieron cambiar, ni inventar un nuevo identificador.
   const reintentarEnvioPrevio = async () => {
-    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoRecuperacion?.estado !== 'ENVIO_PREVIO' ||
-        !maquinaInfo?.id || !estadoRecuperacion.requestId ||
+    if (!puestoActivo || permisoPuestoRef.current !== maquinaInfo?.id || submitting || estadoActualPuesto?.estado !== 'ENVIO_PREVIO' ||
+        !maquinaInfo?.id || !estadoActualPuesto.requestId ||
         (pruebaPendiente && !editorActivo)) return;
     setSubmitting(true);
     try {
       const { data, error } = await reintentarIntentoGuardado({
         supabase, storage: localStorage, lockManager: navigator.locks,
         legajo: user.legajo, maquina: maquinaInfo.id,
-        requestId: estadoRecuperacion.requestId,
+        requestId: estadoActualPuesto.requestId,
       });
       if (error || !data?.prueba_id) {
         setErrorBorrador(error?.message || 'No se confirmó el intento anterior. Los datos no se borraron.');
         return;
       }
-      const limpieza = limpiarConfirmado(maquinaInfo.id, estadoRecuperacion.requestId, data.prueba_id);
+      const limpieza = limpiarConfirmado(maquinaInfo.id, estadoActualPuesto.requestId, data.prueba_id);
       if (limpieza.estado === 'CONFIRMADA_LIMPIA') setErrorBorrador('');
       borradorHidratado.current = null;
       setPruebaPendiente(null);
@@ -2602,19 +2611,19 @@ const VistaOperario = ({ t, user, refresh }) => {
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
-      {estadoRecuperacion && ['ENVIO_PREVIO', 'INCIERTO', 'INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoRecuperacion.estado) && (
+      {estadoActualPuesto && ['ENVIO_PREVIO', 'INCIERTO', 'INTERVENCION', 'CONFIRMADA_CON_RESIDUOS'].includes(estadoActualPuesto.estado) && (
         <div role="status" style={{ padding: 14, marginBottom: 12, border: `1px solid ${t.warn}`, borderRadius: 8, color: t.text, background: t.warnSoft }}>
-          <strong>{estadoRecuperacion.estado === 'CONFIRMADA_CON_RESIDUOS'
+          <strong>{estadoActualPuesto.estado === 'CONFIRMADA_CON_RESIDUOS'
             ? 'Prueba confirmada; limpieza local pendiente'
-            : estadoRecuperacion.estado === 'ENVIO_PREVIO'
+            : estadoActualPuesto.estado === 'ENVIO_PREVIO'
               ? 'Intento anterior pendiente de revisión' : 'Registro local que requiere atención'}</strong>
-          <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoRecuperacion.mensaje}</p>
+          <p style={{ margin: '8px 0', fontSize: 13 }}>{estadoActualPuesto.mensaje}</p>
           <button type="button" disabled={!puestoActivo || !maquinaInfo?.id || submitting}
             onClick={() => restaurarEstadoDeMaquina(maquinaInfo.id)}
             style={{ padding: '8px 12px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.surfaceHi, color: t.text, cursor: 'pointer' }}>
             Consultar servidor y revisar registro local
           </button>
-          {estadoRecuperacion.estado === 'ENVIO_PREVIO' && (
+          {estadoActualPuesto.estado === 'ENVIO_PREVIO' && (
             <button type="button"
               disabled={!puestoActivo || submitting || (Boolean(pruebaPendiente) && !editorActivo)}
               onClick={reintentarEnvioPrevio}
