@@ -29,6 +29,32 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
   turno anterior, persistir identificadores de prueba y contramuestra y
   registrar la comprobación física de forma trazable e idempotente.
 
+## Criterios físicos confirmados por Planta
+
+La revisión de la contramuestra aleatoria debe verificar **todo** lo siguiente
+contra el registro digital original de la prueba seleccionada:
+
+1. Existe físicamente la contramuestra correspondiente.
+2. Contiene **exactamente 20 cabezales**, no menos ni más.
+3. La identificación de **caja y lote** coincide con la registrada.
+4. La cantidad de cabezales **con defectos y sin defectos** coincide con lo
+   declarado digitalmente. Por ejemplo, 3 defectuosos y 17 sin defectos
+   registrados deben corresponder a 3 y 17 físicamente identificados.
+5. Se conserva la evidencia de quién revisó, cuándo y cualquier discrepancia.
+
+La verificación es de **concordancia física-documental**, no una repetición
+de la prueba de estanqueidad ni una certificación de la existencia real
+de una fuga. No cambia el resultado original del operario.
+
+**Revisión pendiente de código:** el formulario actual comprueba presencia,
+cantidad, etiqueta/lote y caja, pero la condición `OK` inspeccionada en
+`completarVerificacion` sólo exige presencia y coincidencia de etiqueta/lote
+y caja; no compara explícitamente `cantidad_encontrada === 20` ni la
+distribución defectuosos/no defectuosos con el registro digital. **No declarar
+este criterio implementado hasta corregirlo con validación en servidor,
+pruebas y manejo seguro de datos históricos incompletos.** No crear un
+resultado ficticio cuando falten cantidades.
+
 ## Implementación existente que se preserva
 
 - `src/App.jsx`: `asegurarVerificacionesTurnoAnterior` selecciona pruebas del
