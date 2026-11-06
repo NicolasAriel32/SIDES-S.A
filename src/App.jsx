@@ -15,6 +15,8 @@ import {
 } from 'recharts';
 import VistaControlCalidad from './VistaControlCalidad.jsx';
 import VistaRecontrol from './VistaRecontrol.jsx';
+import { validarResultadoEstanqueidad, resumirPruebasConFalla } from './domain/estanqueidad.js';
+import { registrarPruebaEstanqueidad } from './api/estanqueidad.js';
 
 
 /* =================================================================
@@ -713,7 +715,7 @@ const dataService = {
       .from('pruebas')
       .select(`
         *,
-        fallas:pruebas_fallas(tipo_falla_id)
+        fallas:pruebas_fallas(tipo_falla_id, cantidad_items_afectados)
       `)
       .order('created_at', { ascending: false });
     // Si se pasa un timestamp de inicio de turno, filtramos en BD (más eficiente)
@@ -751,6 +753,9 @@ const dataService = {
         codigoProducto:      p.codigo_producto,
         observaciones:       p.observaciones,
         tipos:               p.fallas?.map(f => f.tipo_falla_id) || [],
+        cantidadesTipos:     p.spc_request_id ? Object.fromEntries((p.fallas || []).map(f => [f.tipo_falla_id, f.cantidad_items_afectados])) : null,
+        origenEvento:        p.spc_origen_evento ?? 'HISTORICO_NO_VERIFICADO',
+        aptitudSpc:          p.spc_uso_estadistico ?? 'NO_VALIDADO',
         cabezalesFalla:      p.cantidad_cabezales_afectados ?? 0,
         tuvoFalla:           p.tuvo_falla === true,
         esperandoAprobacion: (p.tuvo_falla === true && ['PENDIENTE_APROBACION','REVISION_100_CAJA'].includes(p.estado_final)),
@@ -769,108 +774,43 @@ const dataService = {
   },
 
   async createTest(test) {
-    // 1) Verificar que la máquina exista (id_maquina es FK varchar)
-    const { data: maquina, error: maquinaError } = await supabase
-      .from('maquinas')
-      .select('id')
-      .eq('id', test.maquina)
-      .maybeSingle()
-
-    console.log('createTest maquina lookup:', { maquina, maquinaError, test })
-    this._ultimoError = null
-    if (maquinaError || !maquina) {
-      console.error('createTest: máquina no encontrada', { maquina: test.maquina, maquinaError })
-      this._ultimoError = maquinaError?.message || `máquina ${test.maquina} no encontrada`
-      return null
+    const validez = validarResultadoEstanqueidad({
+      estado: test.estado, tipos: test.tipos, cabezalesFalla: test.cabezalesFalla,
+      cantidadesTipos: test.cantidadesTipos || {}, autoPendiente: test.autoPendiente === true,
+    });
+    if (!validez.ok) { this._ultimoError = validez.mensaje; return null; }
+    if (!test.requestId) { this._ultimoError = 'Solicitud sin identificador estable. Reabrí el registro manual.'; return null; }
+    this._ultimoError = null;
+    // SPC-001: sin fallback a inserts directos. La migracion debe probarse
+    // primero en staging. Ninguna escritura debe dejar fallas parciales.
+    let data, error, payload;
+    try {
+      ({ data, error, payload } = await registrarPruebaEstanqueidad(supabase, test));
+    } catch (e) {
+      // Errores de validación o red no deben consumir el inicio manual local.
+      this._ultimoError = e?.message || 'Fallo la conexión antes de confirmar el registro.';
+      return null;
     }
-// 2) Turno actual. El numero_secuencial lo asigna PostgreSQL mediante
-    // DEFAULT nextval(...); el cliente no consume la secuencia directamente.
-    const turnoId = await this.getTurnoActualId()
-
-    // 3) Mapeo de estado del modelo interno → resultado/estado_final del schema
-    // v6: si es auto-PENDIENTE (60 min sin carga), resultado queda null y estado_final='PENDIENTE'
-    const esPendienteAuto = test.autoPendiente === true
-    const tuvoFalla = esPendienteAuto ? false : (test.estado === 'RECHAZADO')
-    const resultado = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'RECHAZADO' : 'OK')  // FIX: columna NOT NULL
-    const estadoFinal = esPendienteAuto ? 'PENDIENTE' : (tuvoFalla ? 'PENDIENTE_APROBACION' : 'OK')
-
-    // 4) Insert en pruebas
-    const { data: prueba, error } = await supabase
-      .from('pruebas')
-      .insert({
-        id_maquina:                   test.maquina,
-        fecha_hora:                   test.fechaSenal || new Date().toISOString(),
-        codigo_producto:              test.codigoProducto,
-        numero_caja:                  test.caja,
-        numero_lote:                  test.lote,
-        resultado:                    resultado,
-        tuvo_falla:                   tuvoFalla,
-        cantidad_cabezales_afectados: test.cabezalesFalla || 0,
-        observaciones:                test.observaciones || null,
-        operario_legajo:              test.legajoOperario,
-        estado_final:                 estadoFinal,
-        timestamp_recibida:           test.fechaSenal || new Date().toISOString(),
-        timestamp_completada:         new Date().toISOString(),
-        turno_id:                     turnoId
-        // hash_integridad y firma_criptografica quedan nulos (deuda ISO conocida)
-      })
-      .select()
-      .single()
-
-    console.log('createTest prueba insert response:', { prueba, error })
-    if (error) {
-      if (error.code === '23505') {
-        const timestampRecibida = test.fechaSenal || new Date().toISOString()
-        const { data: existente, error: existenteError } = await supabase
-          .from('pruebas')
-          .select('*')
-          .eq('id_maquina', test.maquina)
-          .eq('timestamp_recibida', timestampRecibida)
-          .eq('anulada', false)
-          .maybeSingle()
-
-        if (existenteError) {
-          console.error('createTest: error fetching existing duplicate prueba', existenteError)
-          return null
-        }
-
-        return existente
+    if (error || !data?.prueba_id) {
+      console.error('createTest RPC estanqueidad:', error);
+      this._ultimoError = error?.message || 'No se confirmó el registro de la prueba.';
+      return null;
+    }
+    const fecha = new Date(normalizarFechaUTC(test.fechaSenal || new Date().toISOString()));
+    const codigoHumano = `PRB-${fechaLocalAR(fecha).replace(/-/g, '')}-${String(data.numero_secuencial).padStart(4,'0')}`;
+    if (!data.duplicado) {
+      try {
+        await this.logEvent({
+          accion: 'CREATE', usuario: test.operario, usuarioLegajo: test.legajoOperario,
+          desc: `Prueba ${codigoHumano} · ${payload.resultado} · origen manual no OT`,
+          tabla: 'pruebas', registroId: data.prueba_id,
+        });
+      } catch (auditError) {
+        console.warn('El registro se confirmó, pero falló el log complementario:', auditError);
       }
-
-      console.error('createTest:', error)
-      this._ultimoError = error.message
-      return null
     }
-
-    const numeroSec = prueba.numero_secuencial
-
-    // 5) Si hay fallas, insertarlas en pruebas_fallas con tipo_falla_id
-    if (test.tipos && test.tipos.length > 0) {
-      const { error: fallasErr } = await supabase
-        .from('pruebas_fallas')
-        .insert(
-          test.tipos.map(tipo => ({
-            prueba_id:                prueba.id,
-            tipo_falla_id:            tipo,
-            cantidad_items_afectados: 1
-          }))
-        )
-      if (fallasErr) console.error('createTest pruebas_fallas insert:', fallasErr)
-    }
-
-    // 6) Audit log
-    const codigoHumano = `PRB-${new Date(prueba.timestamp_recibida || Date.now())
-      .toISOString().slice(0,10).replace(/-/g,'')}-${String(numeroSec).padStart(4,'0')}`
-    await this.logEvent({
-      accion: 'CREATE',
-      usuario: test.operario,
-      usuarioLegajo: test.legajoOperario,
-      desc: `Prueba ${codigoHumano} · ${resultado}`,
-      tabla: 'pruebas',
-      registroId: prueba.id
-    })
-
-    return { ...test, id: codigoHumano, supabase_id: prueba.id, numeroSecuencial: numeroSec }
+    return { ...test, id: codigoHumano, supabase_id: data.prueba_id,
+             numeroSecuencial: data.numero_secuencial, repetido: data.duplicado === true };
   },
 
   // Actualiza una prueba. Se busca por código humano (PRB-...) o supabase_id (uuid).
@@ -1108,7 +1048,7 @@ const dataService = {
         prueba:pruebas!prueba_id(
           id, numero_secuencial, id_maquina, operario_legajo,
           observaciones, cantidad_cabezales_afectados, timestamp_recibida,
-          fallas:pruebas_fallas(tipo_falla_id)
+          fallas:pruebas_fallas(tipo_falla_id, cantidad_items_afectados)
         ),
         control_calidad:controles_calidad!control_calidad_id(
           id, id_maquina, nombre_producto, numero_lote,
@@ -1993,6 +1933,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [pruebaPendiente, setPruebaPendiente] = useState(null);
   const [tuvoFalla, setTuvoFalla] = useState(null);
   const [tiposSeleccionados, setTiposSeleccionados] = useState([]);
+  const [cantidadesTipos, setCantidadesTipos] = useState({});
   const [cabezalesFalla, setCabezalesFalla] = useState(0);
   const [codigoProducto, setCodigoProducto] = useState('');
   const [errorCodigo, setErrorCodigo] = useState('');
@@ -2010,6 +1951,7 @@ const VistaOperario = ({ t, user, refresh }) => {
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState(0);
   // v6: flag para que el auto-guardado de PENDIENTE (60 min) solo se ejecute una vez
   const [autoGuardado, setAutoGuardado] = useState(false);
+  const [errorPendiente, setErrorPendiente] = useState('');
 
   // CAMBIO v4: estados para mensajes del supervisor
   const [observaciones, setObservaciones] = useState([]);
@@ -2055,6 +1997,14 @@ const VistaOperario = ({ t, user, refresh }) => {
   const persistirSenal = (maquinaId, senal) => { try { localStorage.setItem(claveSenal(maquinaId), JSON.stringify(senal)); } catch {} };
   const limpiarSenal   = (maquinaId) => { try { localStorage.removeItem(claveSenal(maquinaId)); } catch {} };
   const leerSenal      = (maquinaId) => { try { return JSON.parse(localStorage.getItem(claveSenal(maquinaId)) || 'null'); } catch { return null; } };
+  const recuperarSenalConId = (maquinaId) => {
+    const guardada = leerSenal(maquinaId);
+    if (!guardada || guardada.requestId) return guardada;
+    // Recuperar una señal local previa sin reescribir ninguna prueba histórica.
+    const migrada = { ...guardada, requestId: crypto.randomUUID() };
+    persistirSenal(maquinaId, migrada);
+    return migrada;
+  };
 
   // v7: registra una señal vencida como PENDIENTE (sin datos de carga) y la
   // limpia del almacenamiento local. Se usa al volver a entrar con una señal
@@ -2068,25 +2018,28 @@ const VistaOperario = ({ t, user, refresh }) => {
         estado: 'PENDIENTE',
         caja: null, lote: null, codigoProducto: null,
         observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
-        tipos: [], cabezalesFalla: 0, esperandoAprobacion: false,
+        tipos: [], cantidadesTipos: {}, cabezalesFalla: 0, esperandoAprobacion: false,
         timestamp: new Date().toISOString(),
         autoPendiente: true,
       };
       const inserted = await dataService.createTest(test);
-      if (inserted) {
+      if (!inserted) return false;
+      try {
         await dataService.logEvent({
-          accion: 'AUTO_PENDIENTE',
-          usuario: `${user.nombre} ${user.apellido}`,
+          accion: 'AUTO_PENDIENTE', usuario: `${user.nombre} ${user.apellido}`,
           usuarioLegajo: user.legajo,
-          desc: `Prueba ${senal.id} auto-registrada como PENDIENTE · 60 min sin carga (detectado al reingresar)`,
-          tabla: 'pruebas',
-          registroId: inserted.supabase_id,
+          desc: `Prueba ${senal.id} auto-registrada como PENDIENTE · 60 min sin carga (al reingresar)`,
+          tabla: 'pruebas', registroId: inserted.supabase_id,
         });
+      } catch (auditError) {
+        console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
+      limpiarSenal(maquinaId);
+      return true;
     } catch (e) {
       console.error('registrarPendienteAuto:', e);
+      return false;
     }
-    limpiarSenal(maquinaId);
   };
 
   useEffect(() => {
@@ -2109,14 +2062,20 @@ const VistaOperario = ({ t, user, refresh }) => {
 
       // v7: restaurar señal persistida. Si ya venció (>60 min) se registra
       // PENDIENTE automáticamente y el operario espera la próxima señal.
-      const guardada = m?.id ? leerSenal(m.id) : null;
+      const guardada = m?.id ? recuperarSenalConId(m.id) : null;
       if (guardada?.fechaSenal) {
         const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
         if (transcurrido >= LIMITE_PENDIENTE_SEG) {
-          await registrarPendienteAuto(guardada, m.id);
-          setPruebaPendiente(null);
-          if (m?.id) await recalcularContador(m.id);
-          refresh();
+          const registrado = await registrarPendienteAuto(guardada, m.id);
+          if (registrado) {
+            setPruebaPendiente(null);
+            if (m?.id) await recalcularContador(m.id);
+            refresh();
+          } else {
+            setPruebaPendiente(guardada);
+            setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
+            setAutoGuardado(true);
+          }
         } else {
           setPruebaPendiente(guardada);   // el reloj sigue desde la señal original
         }
@@ -2134,20 +2093,26 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!m || m.id === maquinaInfo?.id) return;
     setMaquinaInfo(m);
     setPruebaPendiente(null);
-    setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+    setAutoGuardado(false); setErrorPendiente('');
+    setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
     setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     setLoteAutocompletado(false);
     await recalcularContador(m.id, true);
     // restaurar señal persistida de esa máquina (si existe)
-    const guardada = leerSenal(m.id);
+    const guardada = recuperarSenalConId(m.id);
     if (guardada?.fechaSenal) {
       const transcurrido = (Date.now() - new Date(guardada.fechaSenal).getTime()) / 1000;
-      if (transcurrido >= LIMITE_PENDIENTE_SEG) await registrarPendienteAuto(guardada, m.id);
-      else setPruebaPendiente(guardada);
+      if (transcurrido >= LIMITE_PENDIENTE_SEG) {
+        if (!await registrarPendienteAuto(guardada, m.id)) {
+          setPruebaPendiente(guardada);
+          setErrorPendiente('No se pudo guardar el pendiente. La señal local se conservó.');
+          setAutoGuardado(true);
+        }
+      } else setPruebaPendiente(guardada);
     }
   };
 
-  // FIX v5: botón manual para simular la señal del PLC
+  // SPC-001: inicio manual simulado, NO se conecta a Kinco/Delta.
   const generarSenalPLC = async () => {
     if (!maquinaInfo?.id) return;
     const numeroPrueba = await recalcularContador(maquinaInfo.id, true);
@@ -2157,6 +2122,7 @@ const VistaOperario = ({ t, user, refresh }) => {
       id: `PRB-${fechaLocalAR(ahora).replace(/-/g, '')}-${String(numeroPrueba).padStart(4, '0')}`,
       maquina: maquinaInfo.id,
       numeroSecuencial: numeroPrueba,
+      requestId: crypto.randomUUID(),
       fechaSenal: ahora.toISOString(),
       fechaSenalFormateada: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }),
     };
@@ -2165,7 +2131,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     await dataService.logEvent({
       accion: 'SIGNAL',
       usuario: `${user.nombre} ${user.apellido}`,
-      desc: `Señal simulada de PLC · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
+      desc: `Inicio MANUAL SIMULADO (NO OT) · máquina ${maquinaInfo.id} · prueba #${numeroPrueba}`
     });
   };
 
@@ -2185,48 +2151,49 @@ const VistaOperario = ({ t, user, refresh }) => {
   const autoGuardarComoPendiente = async () => {
     if (!pruebaPendiente || autoGuardado) return;
     setAutoGuardado(true);
+    setErrorPendiente('');
     try {
       const test = {
         ...pruebaPendiente,
         operario: `${user.nombre} ${user.apellido}`,
         legajoOperario: user.legajo,
         estado: 'PENDIENTE',
-        caja: caja || null,
-        lote: lote || null,
-        codigoProducto: codigoProducto || null,
+        caja: null, lote: null, codigoProducto: null,
+        // Se trata de una señal manual vencida, no de un ensayo físico terminado.
+        // No enviamos borradores incompletos que podrían violar formato de producto.
         observaciones: 'AUTO: registrada como PENDIENTE por inactividad (60 min sin carga)',
-        tipos: [],
-        cabezalesFalla: 0,
-        esperandoAprobacion: false,
-        timestamp: new Date().toISOString(),
-        autoPendiente: true,
+        tipos: [], cantidadesTipos: {}, cabezalesFalla: 0,
+        esperandoAprobacion: false, timestamp: new Date().toISOString(), autoPendiente: true,
       };
       const inserted = await dataService.createTest(test);
-      if (inserted) {
+      if (!inserted) {
+        setErrorPendiente(dataService._ultimoError || 'No se guardó la prueba pendiente. Se conservó la señal local.');
+        return; // No borrar ni liberar para reintentos automáticos en bucle.
+      }
+      try {
         await dataService.logEvent({
-          accion: 'AUTO_PENDIENTE',
-          usuario: `${user.nombre} ${user.apellido}`,
+          accion: 'AUTO_PENDIENTE', usuario: `${user.nombre} ${user.apellido}`,
           usuarioLegajo: user.legajo,
           desc: `Prueba ${pruebaPendiente.id} auto-registrada como PENDIENTE · 60 min sin carga`,
-          tabla: 'pruebas',
-          registroId: inserted.supabase_id,
+          tabla: 'pruebas', registroId: inserted.supabase_id,
         });
+      } catch (auditError) {
+        console.warn('El registro principal se confirmó, pero falló el log complementario:', auditError);
       }
     } catch (e) {
       console.error('autoGuardarComoPendiente:', e);
+      setErrorPendiente('No se pudo confirmar el registro pendiente. Se conservó la señal local.');
+      return;
     }
-    // Resetear form
-    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: la señal vencida no debe revivir al recargar
+    // Sólo limpiar la señal cuando la RPC confirmó el registro.
+    if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);
     setPruebaPendiente(null);
     setAutoGuardado(false);
+    setErrorPendiente('');
     setTuvoFalla(null);
-    setTiposSeleccionados([]);
+    setTiposSeleccionados([]); setCantidadesTipos({});
     setCabezalesFalla(0);
-    setCaja('');
-    setLote('');
-    setObs('');
-    setCodigoProducto('');
-    setErrorCodigo('');
+    setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
     if (maquinaInfo?.id) await recalcularContador(maquinaInfo.id);
     refresh();
   };
@@ -2236,7 +2203,7 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (tiempoTranscurrido >= LIMITE_PENDIENTE_SEG) {
       autoGuardarComoPendiente();
     }
-  }, [tiempoTranscurrido]);
+  }, [tiempoTranscurrido, autoGuardado]);
 
   // CAMBIO v4: Polling cada 15 segundos + Realtime como respaldo
   // Usamos operario_legajo porque no tenemos Supabase Auth (piloto sin JWT)
@@ -2323,7 +2290,11 @@ const VistaOperario = ({ t, user, refresh }) => {
     if (!codigoProducto || errorCodigo) return;
     if (!caja || !lote) return;
     if (tuvoFalla === null) return;
-    if (tuvoFalla === true && tiposSeleccionados.length === 0) return;
+    const validez = validarResultadoEstanqueidad({
+      estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
+      tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
+    });
+    if (!validez.ok) { alert(validez.mensaje); return; }
 
     setSubmitting(true);
     try {
@@ -2333,7 +2304,7 @@ const VistaOperario = ({ t, user, refresh }) => {
         legajoOperario: user.legajo,
         estado: tuvoFalla ? 'RECHAZADO' : 'OK',
         caja, lote, codigoProducto, observaciones: obs,
-        tipos: tiposSeleccionados, cabezalesFalla,
+        tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
         esperandoAprobacion: tuvoFalla,
         timestamp: new Date().toISOString(),
       };
@@ -2341,23 +2312,17 @@ const VistaOperario = ({ t, user, refresh }) => {
       const inserted = await dataService.createTest(test);
       if (!inserted) {
         alert(
-          'No se pudo registrar la prueba.\n\n' +
-          (dataService._ultimoError ? `Detalle: ${dataService._ultimoError}\n\n` : '') +
-          `Verificá que la máquina ${test.maquina} esté creada en la tabla "maquinas" ` +
-          'y que el legajo del operario exista en "usuarios".'
+          'No se pudo registrar la prueba. No se descartó la solicitud; podés reintentar.\n\n' +
+          (dataService._ultimoError ? `Detalle: ${dataService._ultimoError}` : 'Revisá la conexión y los permisos de la cuenta.')
         );
         return;
       }
-      await dataService.logEvent({
-        accion: 'CREATE', usuario: `${user.nombre} ${user.apellido}`,
-        desc: `Prueba ${inserted.id} · ${test.estado} · ${codigoProducto}`
-      });
-
+      // La RPC y los triggers guardan la evidencia; createTest hace log complementario.
       if (maquinaInfo?.id) limpiarSenal(maquinaInfo.id);  // v7: prueba cargada → señal consumida
 
       setShowSuccess(true);
       setTimeout(async () => {
-        setTuvoFalla(null); setTiposSeleccionados([]); setCabezalesFalla(0);
+        setTuvoFalla(null); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0);
         setCaja(''); setLote(''); setObs(''); setCodigoProducto(''); setErrorCodigo('');
         setLoteAutocompletado(false);
         setShowSuccess(false);
@@ -2371,7 +2336,11 @@ const VistaOperario = ({ t, user, refresh }) => {
   };
 
   const tieneCriticaSeleccionada = tiposSeleccionados.some(id => TIPOS_FALLA.find(tf => tf.id === id)?.gravedad === 'CRITICA');
-  const formularioValido = codigoProducto && !errorCodigo && caja && lote && tuvoFalla !== null && (tuvoFalla === false || tiposSeleccionados.length > 0);
+  const validacionMuestra = validarResultadoEstanqueidad({
+    estado: tuvoFalla === true ? 'RECHAZADO' : tuvoFalla === false ? 'OK' : null,
+    tipos: tiposSeleccionados, cantidadesTipos, cabezalesFalla,
+  });
+  const formularioValido = Boolean(codigoProducto && !errorCodigo && caja && lote && validacionMuestra.ok);
 
   const PRUEBAS_POR_TURNO = 8;
 
@@ -2429,9 +2398,9 @@ const VistaOperario = ({ t, user, refresh }) => {
         </div>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>PRUEBAS DEL TURNO</div>
+            <div style={{ fontSize: 10, color: t.textDim, fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>PRUEBAS DEL TURNO (REFERENCIA ESTIMADA)</div>
             <div style={{ fontFamily: 'JetBrains Mono', color: t.success, fontSize: 14, fontWeight: 500 }}>
-              {pruebasDelTurno.filter(t => t.estado !== 'PENDIENTE').length} de {PRUEBAS_POR_TURNO}
+              {pruebasDelTurno.filter(t => t.estado !== 'PENDIENTE').length} / {PRUEBAS_POR_TURNO} orientativas
             </div>
           </div>
           <button onClick={() => setShowHistorial(true)} style={{
@@ -2475,11 +2444,11 @@ const VistaOperario = ({ t, user, refresh }) => {
             <Cpu size={32} color={t.textMuted} />
           </div>
           <h2 style={{ fontFamily: 'Bricolage Grotesque', fontSize: 26, color: t.text, fontWeight: 600 }}>
-            Esperando señal del PLC
+            Registro de estanqueidad — modo manual
           </h2>
           <p style={{ fontFamily: 'Manrope', color: t.textMuted, marginTop: 8, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto' }}>
-            Cuando la máquina <span style={{ fontFamily: 'JetBrains Mono', color: t.text }}>{maquinaInfo?.id || '—'}</span> emita la señal de prueba se va a habilitar el formulario.
-            Mientras tanto podés usar el botón de simulación para empezar la próxima prueba manualmente.
+            En MAQ-010 el aviso real se muestra en la HMI Kinco; para otras máquinas seguí el procedimiento industrial vigente.
+            Este botón inicia un registro manual: no recibe datos del PLC ni verifica la hora del aviso.
           </p>
           <button onClick={generarSenalPLC} disabled={!maquinaInfo?.id} style={{
             marginTop: 24, padding: '14px 28px',
@@ -2491,14 +2460,23 @@ const VistaOperario = ({ t, user, refresh }) => {
             display: 'inline-flex', alignItems: 'center', gap: 8
           }}>
             <Zap size={16} />
-            Simular señal del PLC
+            Iniciar registro manual (simulado)
           </button>
           <div style={{ marginTop: 12, fontFamily: 'JetBrains Mono', fontSize: 10, color: t.textDim, letterSpacing: '0.05em' }}>
-            MODO PILOTO · BOTÓN MANUAL · REEMPLAZA AL PLC HASTA INTEGRACIÓN FÍSICA
+            MODO PILOTO · SIN CAPTURA OT VERIFICADA · HORA DE INICIO LOCAL
           </div>
         </Card>
       ) : pruebaPendiente && (
         <>
+          {errorPendiente && (
+            <div role="alert" style={{ padding: 14, marginBottom: 12, background: t.dangerSoft, border: `1px solid ${t.danger}`, borderRadius: 8 }}>
+              <p style={{ color: t.danger, margin: '0 0 8px' }}>{errorPendiente}</p>
+              <button type="button" onClick={() => { setErrorPendiente(''); setAutoGuardado(false); }}
+                style={{ padding: '8px 12px', borderRadius: 5, background: t.surfaceHi, color: t.text, border: `1px solid ${t.border}`, cursor: 'pointer' }}>
+                Reintentar guardar pendiente
+              </button>
+            </div>
+          )}
           <Card t={t} padding={24} style={{
             background: `linear-gradient(135deg, ${tiempoTranscurrido >= 3000 ? t.dangerSoft : t.warnSoft} 0%, ${t.surface} 60%)`,
             borderColor: (tiempoTranscurrido >= 3000 ? t.danger : t.warn) + '80',
@@ -2529,7 +2507,7 @@ const VistaOperario = ({ t, user, refresh }) => {
                   {pruebaPendiente.id}
                 </div>
                 <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 13, marginTop: 4 }}>
-                  Señal recibida {pruebaPendiente.fechaSenalFormateada} · 20 cabezales para evaluar
+                  Registro manual iniciado {pruebaPendiente.fechaSenalFormateada} · 20 cabezales · no es hora OT
                 </div>
                 {/* Aviso crítico a los 50 min */}
                 {tiempoTranscurrido >= 3000 && tiempoTranscurrido < LIMITE_PENDIENTE_SEG && (
@@ -2608,7 +2586,7 @@ const VistaOperario = ({ t, user, refresh }) => {
 
             <Label t={t}>¿Tuvo falla? <Asterisk t={t} /></Label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
-              <button onClick={() => { setTuvoFalla(false); setTiposSeleccionados([]); setCabezalesFalla(0); }} style={{
+              <button onClick={() => { setTuvoFalla(false); setTiposSeleccionados([]); setCantidadesTipos({}); setCabezalesFalla(0); }} style={{
                 padding: '20px 16px', borderRadius: 8, cursor: 'pointer',
                 background: tuvoFalla === false ? t.successSoft : t.surfaceHi,
                 border: `2px solid ${tuvoFalla === false ? t.success : t.border}`,
@@ -2647,7 +2625,14 @@ const VistaOperario = ({ t, user, refresh }) => {
                     const checked = tiposSeleccionados.includes(tf.id);
                     return (
                       <button key={tf.id}
-                        onClick={() => setTiposSeleccionados(s => s.includes(tf.id) ? s.filter(x => x !== tf.id) : [...s, tf.id])}
+                        onClick={() => {
+                          setTiposSeleccionados(s => s.includes(tf.id) ? s.filter(x => x !== tf.id) : [...s, tf.id]);
+                          setCantidadesTipos(prev => {
+                            const next = { ...prev };
+                            if (checked) delete next[tf.id]; else next[tf.id] = '';
+                            return next;
+                          });
+                        }}
                         style={{
                           padding: '10px 12px', borderRadius: 6, cursor: 'pointer',
                           background: checked ? t.danger : t.surface,
@@ -2673,15 +2658,36 @@ const VistaOperario = ({ t, user, refresh }) => {
                     );
                   })}
                 </div>
+                {tiposSeleccionados.length > 0 && (
+                  <div style={{ marginTop: 14, display: 'grid', gap: 8 }}>
+                    <div style={{ fontFamily: 'Manrope', color: t.textMuted, fontSize: 12 }}>
+                      Cabezales afectados por cada tipo (una unidad puede tener varios tipos):
+                    </div>
+                    {tiposSeleccionados.map(id => (
+                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, color: t.text, fontSize: 12 }}>
+                        <span style={{ flex: 1 }}>{TIPOS_FALLA.find(tf => tf.id === id)?.nombre || id}</span>
+                        <input aria-label={`Cabezales con falla ${id}`} type="number" min="1" max={Math.max(1, cabezalesFalla)} step="1"
+                          value={cantidadesTipos[id] ?? ''}
+                          onChange={e => setCantidadesTipos(c => ({ ...c, [id]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                          style={{ width: 76, padding: '7px 8px', background: t.surface, border: `1px solid ${t.border}`, color: t.text, borderRadius: 5, textAlign: 'center' }} />
+                      </label>
+                    ))}
+                  </div>
+                )}
                 <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, flex: 1 }}>¿Cuántos cabezales con falla?</span>
-                  <input type="number" min="0" max="20" value={cabezalesFalla} onChange={e => setCabezalesFalla(parseInt(e.target.value || 0))} style={{
+                  <span style={{ fontFamily: 'Manrope', fontSize: 13, color: t.text, flex: 1 }}>¿Cuántos cabezales únicos tuvieron falla?</span>
+                  <input type="number" min="1" max="20" step="1" value={cabezalesFalla} onChange={e => setCabezalesFalla(e.target.value === '' ? 0 : Number(e.target.value))} style={{
                     width: 70, padding: '6px 10px', borderRadius: 4,
                     background: t.surface, border: `1px solid ${t.border}`,
                     color: t.text, textAlign: 'center', fontFamily: 'JetBrains Mono', fontSize: 14
                   }} />
                   <span style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: t.textMuted }}>de 20</span>
                 </div>
+                {!validacionMuestra.ok && (
+                  <div role="alert" style={{ fontFamily: 'Manrope', fontSize: 12, color: t.danger, marginTop: 10 }}>
+                    {validacionMuestra.mensaje}
+                  </div>
+                )}
               </div>
             )}
 
@@ -3484,7 +3490,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   const pruebasRechazadas = tests.filter(t => t.estado === 'RECHAZADO').length;
   // Pruebas que quedaron bloqueadas en PENDIENTE (no se pueden modificar)
   const pruebasBloqueadas = tests.filter(t => t.estadoFinal === 'PENDIENTE').length;
-  const tasaFalla = totalPruebas > 0 ? Math.round((pruebasRechazadas / totalPruebas) * 100) : 0;
+  const { evaluables: totalEvaluables, porcentajeConFalla: tasaFalla } = resumirPruebasConFalla(tests);
   const totalIncidenciasTipos = paretoTurno.reduce((s, p) => s + p.cantidad, 0);
 
   // v7: KPI de NC removido — las NC se gestionan en Control de Calidad
@@ -3744,15 +3750,14 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`de ${idealAhora * machinesIntegradas.length} previstas`} />
-        <KPI t={t} label="Tasa de falla" value={`${tasaFalla}%`}
-          sub={`${pruebasRechazadas} rechazos / ${totalPruebas} pruebas`}
-          tone={tasaFalla > 5 ? 'warn' : 'success'} />
+        <KPI t={t} label="Pruebas turno" value={totalPruebas} sub={`referencia orientativa: ${idealAhora * machinesIntegradas.length}`} />
+        <KPI t={t} label="% pruebas con falla" value={tasaFalla === null ? '—' : `${tasaFalla}%`}
+          sub={`${pruebasRechazadas} con falla / ${totalEvaluables} evaluables`} />
         <KPI t={t} label="Bloqueadas PENDIENTE" value={pruebasBloqueadas}
           sub={pruebasBloqueadas > 0 ? 'sin registro · no modificables' : 'ninguna este turno'}
           tone={pruebasBloqueadas > 0 ? 'danger' : 'success'} />
         <KPI t={t} label="Pruebas OK" value={pruebasOK}
-          sub={totalPruebas > 0 ? `${Math.round((pruebasOK / totalPruebas) * 100)}% del turno` : 'sin pruebas aún'}
+          sub={totalEvaluables > 0 ? `${Math.round((pruebasOK / totalEvaluables) * 100)}% de pruebas evaluables` : 'sin pruebas evaluables'}
           tone="success" />
       </div>
 
@@ -3788,7 +3793,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginBottom: 24 }}>
         <Card t={t} padding={20}>
-          <SectionHeader t={t} title="Progreso por máquina" sub={`Ideal a esta hora · ${idealAhora} pruebas por máquina`} />
+          <SectionHeader t={t} title="Progreso por máquina (estimado)" sub={`Referencia orientativa: ${idealAhora} pruebas por máquina · sin avisos OT verificados`} />
           <div style={{ marginTop: 16 }}>
             {machinesIntegradas.length === 0 ? (
               <EmptyState icon={Power} t={t}
@@ -3819,9 +3824,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
           {/* Encabezado + selector de ventana */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
             <div>
-              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>Pareto de fallas</div>
+              <div style={{ fontFamily: 'Bricolage Grotesque', fontSize: 16, fontWeight: 600, color: t.text }}>Tipos de falla reportados por prueba</div>
               <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted, marginTop: 2 }}>
-                {totalIncidenciasTipos} {totalIncidenciasTipos === 1 ? 'incidencia' : 'incidencias'} · {
+                {totalIncidenciasTipos} {totalIncidenciasTipos === 1 ? 'mención' : 'menciones'} (no cantidad de defectos) · {
                   ventanaPareto === 'turno' ? 'turno actual' :
                   ventanaPareto === 'semana' ? 'últimos 7 días' : 'últimos 30 días'
                 }
