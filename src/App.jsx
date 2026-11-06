@@ -6121,15 +6121,22 @@ export default function App() {
     } catch (e) {
       console.warn('No se pudo registrar el log complementario de cierre:', e);
     }
+    let falloCierreAuth = false;
     try {
       await dataService.logout();
     } catch (e) {
-      console.warn('Falló el cierre remoto; no se reutilizará el perfil local:', e);
+      falloCierreAuth = true;
+      console.warn('Falló el cierre remoto; se descartó la sesión persistida del puesto.', e);
     } finally {
       limpiarPerfilLocal(sessionStorage, STORAGE_KEYS.CURRENT_USER);
       setUser(null);
       cerrandoSesion.current = false;
       setCierreEnCurso(false);
+      if (falloCierreAuth) {
+        // Tras una falla remota de Auth, reiniciar también la instancia JS
+        // para no reutilizar por accidente un token que quedó sólo en memoria.
+        window.location.reload();
+      }
     }
   };
 
