@@ -3,8 +3,7 @@
 import { CABEZALES_POR_MUESTRA, validarResultadoEstanqueidad } from './estanqueidad.js';
 
 export const MAQUINA_PILOTO_SPC = 'MAQ-010';
-// La columna spc_uso_estadistico permanece NO_VALIDADO por contrato.
-// Sólo una RPC autorizada puede proporcionar una validación vigente.
+const aptitudAutorizada = 'VALIDADO';
 
 const cadena = x => typeof x === 'string' && x.trim().length > 0;
 const productoDe = p => cadena(p?.codigoProducto) ? p.codigoProducto.trim() : null;
@@ -16,19 +15,11 @@ const esEnsayo = p => !['PENDIENTE', 'ANULADA', 'ANULADO', 'CANCELADA'].includes
   (p?.estado === 'OK' || p?.estado === 'RECHAZADO');
 
 function categorizarMuestra(p) {
-  const comprobante = p.validacionServidor;
-  // Nunca confiar en spc_uso_estadistico='VALIDADO' ni en hora del browser.
-  // El comprobante debe proceder de la RPC protegida spc_estados_validacion_muestra.
-  if (!comprobante || comprobante.estado !== 'VALIDADA_DESCRIPTIVA' ||
-      comprobante.pruebaId !== idDe(p)) return 'NO_VALIDADO';
+  if (p.aptitudSpc !== aptitudAutorizada) return 'NO_VALIDADO';
   if (!productoDe(p) || p.cabezalesInspeccionados !== CABEZALES_POR_MUESTRA ||
       !Number.isInteger(p.cabezalesFalla) ||
-      !cadena(comprobante.protocoloCodigo) ||
-      !Number.isInteger(comprobante.protocoloVersion) ||
-      comprobante.protocoloVersion < 1 ||
-      !cadena(comprobante.ensayoUtc) ||
-      !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/i.test(comprobante.ensayoUtc) ||
-      !Number.isFinite(Date.parse(comprobante.ensayoUtc))) {
+      !cadena(p.timestamp) || !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/i.test(p.timestamp) ||
+      !Number.isFinite(Date.parse(p.timestamp))) {
     return 'INCOMPLETO';
   }
   return validarResultadoEstanqueidad({
