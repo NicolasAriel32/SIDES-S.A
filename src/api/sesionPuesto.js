@@ -4,6 +4,12 @@ import {
   verificarSesionLocal, verificarPerfilAutenticado, limpiarPerfilLocal,
 } from '../domain/seguridadPuesto.js';
 
+export function borrarTokenAuthLocal(storage, authKey) {
+  if (!authKey || !storage) return false;
+  try { storage.removeItem(authKey); return true; }
+  catch { return false; }
+}
+
 async function perfilVigente(supabase, authUser, legajo, mapUser) {
   const { data, error } = await supabase.from('usuarios').select('*')
     .eq('id', authUser.id).eq('legajo', legajo).maybeSingle();
@@ -15,7 +21,7 @@ async function perfilVigente(supabase, authUser, legajo, mapUser) {
   return { ...mapUser(data), authUserId: authUser.id };
 }
 
-export async function iniciarSesionPuesto({ supabase, storage, key, mapUser, legajo, password }) {
+export async function iniciarSesionPuesto({ supabase, storage, key, authKey, mapUser, legajo, password }) {
   const solicitado = String(legajo || '').trim();
   if (!solicitado || !password) return null;
   let authData;
@@ -23,9 +29,17 @@ export async function iniciarSesionPuesto({ supabase, storage, key, mapUser, leg
     const { data, error } = await supabase.auth.signInWithPassword({
       email: `${solicitado}@sides.internal`, password,
     });
-    if (error || !data?.user?.id) return null;
+    if (error || !data?.user?.id) {
+      limpiarPerfilLocal(storage, key);
+      borrarTokenAuthLocal(storage, authKey);
+      return null;
+    }
     authData = data;
-  } catch { return null; }
+  } catch {
+    limpiarPerfilLocal(storage, key);
+    borrarTokenAuthLocal(storage, authKey);
+    return null;
+  }
 
   try {
     const user = await perfilVigente(supabase, authData.user, solicitado, mapUser);
@@ -34,11 +48,12 @@ export async function iniciarSesionPuesto({ supabase, storage, key, mapUser, leg
   } catch {
     try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* fail closed */ }
     limpiarPerfilLocal(storage, key);
+    borrarTokenAuthLocal(storage, authKey);
     return null;
   }
 }
 
-export async function restaurarSesionPuesto({ supabase, storage, key, mapUser }) {
+export async function restaurarSesionPuesto({ supabase, storage, key, authKey, mapUser }) {
   try {
     const { data, error } = await supabase.auth.getUser();
     if (error || !data?.user?.id) throw new Error('AUTH_NO_VERIFICABLE');
@@ -51,12 +66,13 @@ export async function restaurarSesionPuesto({ supabase, storage, key, mapUser })
     return user;
   } catch {
     limpiarPerfilLocal(storage, key);
+    borrarTokenAuthLocal(storage, authKey);
     return null;
   }
 }
 
-export async function cambiarPasswordPuesto({ supabase, storage, key, mapUser, legajo, newPass }) {
-  const current = await restaurarSesionPuesto({ supabase, storage, key, mapUser });
+export async function cambiarPasswordPuesto({ supabase, storage, key, authKey, mapUser, legajo, newPass }) {
+  const current = await restaurarSesionPuesto({ supabase, storage, key, authKey, mapUser });
   if (!current?.authUserId || current.legajo !== legajo || !newPass) return null;
   try {
     const { data, error } = await supabase.auth.getUser();
@@ -72,12 +88,14 @@ export async function cambiarPasswordPuesto({ supabase, storage, key, mapUser, l
   } catch { return null; }
 }
 
-export async function cerrarSesionPuesto({ supabase, storage, key }) {
+export async function cerrarSesionPuesto({ supabase, storage, key, authKey }) {
   try {
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) throw error;
   } finally {
-    // Solo perfil UI; señales, intentos y borradores pertenecen a otro storage.
+    // Si Auth falló sin conexión, no dejar reutilizable el token persistido.
+    // Esto NO equivale a revocar un access token ya emitido en Supabase.
+    borrarTokenAuthLocal(storage, authKey);
     limpiarPerfilLocal(storage, key);
   }
 }
