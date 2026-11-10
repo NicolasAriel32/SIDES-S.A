@@ -4,5 +4,17 @@
     "deploymentEnabled": {
       "main": false
     }
-  }
+  },
+  "buildCommand": "VITE_SUPABASE_URL=https://yurjxlxmfbvqviemvtqp.supabase.co VITE_SUPABASE_ANON_KEY=sb_publishable_FFcBvc8nBVu7Hduvl-oUJw_SohuNg6e npm run build",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    }
+  ]
 }
