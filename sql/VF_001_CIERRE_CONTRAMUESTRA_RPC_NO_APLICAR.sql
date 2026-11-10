@@ -129,7 +129,7 @@ BEGIN
   IF NOT FOUND OR v_prueba.anulada IS DISTINCT FROM false
     OR v_prueba.resultado IS NULL
     OR v_prueba.resultado NOT IN ('OK','RECHAZADO')
-    OR v_prueba.estado_final IS NULL
+    OR NULLIF(btrim(v_prueba.estado_final::text),'') IS NULL
     OR v_prueba.estado_final IN ('ANULADA','ANULADO','PENDIENTE','CANCELADA')
     OR v_prueba.numero_caja IS NULL OR btrim(v_prueba.numero_caja)=''
     OR v_prueba.numero_lote IS NULL OR btrim(v_prueba.numero_lote)=''

@@ -39,7 +39,7 @@ La función PostgreSQL con privilegios controlados:
 5. Si no hay ledger pero ya hay verificaciones para pruebas del turno
    anterior, registra `LEGADO_EXISTENTE` y **no agrega otras**, evitando
    duplicar el sorteo de versiones antiguas.
-6. Si no hay previas, elige aleatoriamente hasta 2 pruebas no anuladas
+6. Si no hay previas, elige aleatoriamente hasta 2 ensayos no anulados y evaluables según VF-001
    del turno anterior desde **todas las filas de la base** (sin límite
    de paginación del navegador), `ORDER BY random() LIMIT 2`, e inserta.
 7. Persiste en la misma transacción el ledger con cantidad/estado.

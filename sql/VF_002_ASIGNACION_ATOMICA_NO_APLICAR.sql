@@ -167,8 +167,8 @@ BEGIN
     );
   END IF;
 
-  -- Dos pruebas sin reposicion elegidas en la BASE sobre TODAS las filas
-  -- candidatas (no truncadas por un limite de pagina de PostgREST).
+  -- Sortear sólo ensayos que VF-001 puede contrastar y cerrar.
+  -- No truncar el conjunto por los límites de página de PostgREST.
   -- pruebas.created_at es timestamp SIN zona: contrato UTC (DB timezone UTC).
   INSERT INTO public.verificaciones_fisicas (
     codigo, prueba_id, turno_origen_id, supervisor_asignado_id, resultado
@@ -185,6 +185,15 @@ BEGIN
     WHERE p.created_at >= (v_inicio_origen_utc AT TIME ZONE 'UTC')
       AND p.created_at <  (v_inicio_entrante_utc AT TIME ZONE 'UTC')
       AND p.anulada IS FALSE
+      AND p.resultado IN ('OK','RECHAZADO')
+      AND NULLIF(btrim(p.estado_final::text),'') IS NOT NULL
+      AND p.estado_final NOT IN ('ANULADA','ANULADO','PENDIENTE','CANCELADA')
+      AND NULLIF(btrim(p.numero_caja),'') IS NOT NULL
+      AND NULLIF(btrim(p.numero_lote),'') IS NOT NULL
+      AND (
+        (p.resultado='OK' AND p.cantidad_cabezales_afectados=0)
+        OR (p.resultado='RECHAZADO' AND p.cantidad_cabezales_afectados BETWEEN 1 AND 20)
+      )
     ORDER BY pg_catalog.random()
     LIMIT 2
   ) s;

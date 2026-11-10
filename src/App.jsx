@@ -243,17 +243,6 @@ const turnoDeFecha = (date) => {
   return 'N'
 }
 
-// Helper: ventana [desde, hasta) del turno ANTERIOR al actual, en instantes UTC.
-// Los tres turnos duran 8 h, así que el anterior es [inicioActual - 8h, inicioActual).
-// codigoAnterior es el código (M/T/N) de ese turno previo.
-const ventanaTurnoAnterior = (now = new Date()) => {
-  const finAnterior    = inicioTurnoActual(now);
-  const inicioAnterior = new Date(finAnterior.getTime() - 8 * 60 * 60 * 1000);
-  // +1h para caer con seguridad dentro del turno anterior y leer su código.
-  const codigoAnterior = turnoDeFecha(new Date(inicioAnterior.getTime() + 60 * 60 * 1000));
-  return { inicioAnterior, finAnterior, codigoAnterior };
-};
-
 const dataService = {
 
   // ===== USUARIOS =====
@@ -503,12 +492,7 @@ const dataService = {
   },
 
   // ===== VERIFICACIONES FÍSICAS (anti-fraude ISO 9001 · rastreabilidad IRAM) =====
-  // Al iniciar un turno, el supervisor entrante debe corroborar físicamente
-  // 2 pruebas elegidas al azar del turno anterior (contramuestra en almacén).
-  // La RLS ya restringe qué ve/edita cada supervisor (supervisor_asignado_id =
-  // auth.uid()), así que toda esta lógica corre del lado del cliente, igual
-  // que el resto del sistema.
-  // VF-002: la cantidad existente (2) ahora es exclusiva del contrato SQL.
+  // VF-002 asigna los controles desde PostgreSQL; RLS limita su lectura.
 
   // Devuelve las verificaciones del supervisor logueado que siguen PENDIENTE,
   // con los datos de la prueba a buscar en el almacén.
@@ -520,13 +504,12 @@ const dataService = {
         prueba:prueba_id (
           numero_secuencial, id_maquina, numero_caja, numero_lote,
           codigo_producto, operario_legajo, fecha_hora, timestamp_recibida, resultado,
-           cantidad_cabezales_afectados, estado_final, anulada
+          cantidad_cabezales_afectados, estado_final, anulada
         )
       `)
       .eq('resultado', 'PENDIENTE')
       .order('fecha_seleccion', { ascending: true })
 
-    console.log('getVerificacionesPendientes response:', { data, error })
     if (error) { console.error('getVerificacionesPendientes: fallo de lectura'); throw new Error('VF_LECTURA_FALLIDA') }
 
     const usuariosMap = await this.getUsersCache()
@@ -3576,7 +3559,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
               )}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}> 
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div>
                 <div style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 6 }}>
                   ¿Coincide etiqueta/lote?
@@ -3632,7 +3615,7 @@ const ModalVerificacionFisica = ({ t, currentUser, verificaciones, onClose, onDo
                 <span style={{ fontFamily: 'Manrope', fontSize: 13, fontWeight: 600, color: seraOk ? t.success : t.danger }}>
                   {seraOk
                     ? 'Resultado: OK — la contramuestra coincide.'
-                    : 'Resultado: DISCREPANCIA — se marcará para abrir una no conformidad.'}
+                    : 'Resultado: DISCREPANCIA — se registrará el hallazgo físico.'}
                 </span>
               </div>
             )}
@@ -3674,7 +3657,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // Verificaciones físicas del turno anterior (anti-fraude)
   const [verifPendientes, setVerifPendientes] = useState([]);
   const [mostrarVerif, setMostrarVerif] = useState(false);
+  const puedeVerificar = ['supervisor', 'admin'].includes(currentUser?.rol);
   const [errorVerificaciones, setErrorVerificaciones] = useState(false);
+  const [verificacionesListas, setVerificacionesListas] = useState(false);
   const [errorAsignacion, setErrorAsignacion] = useState(false);
   const [avisoAsignacion, setAvisoAsignacion] = useState(null);
   const [mostrarFormNC, setMostrarFormNC] = useState(false);
@@ -3703,7 +3688,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
     // no mezcle registros del día anterior al cruzar la medianoche.
     setTests(await dataService.getTests(inicioTurnoActual()));
     setUnreadObs(await dataService.getAllUnreadObservations());
-    await actualizarVerificaciones();
+    if (puedeVerificar) await actualizarVerificaciones();
   };
 
   useEffect(() => {
@@ -3715,6 +3700,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
   // VF-002: una RPC transaccional asigna una vez por turno y mantiene
   // resultados distinguibles: asignada a mi, a otro, legado o sin pruebas.
   useEffect(() => {
+    if (!puedeVerificar) return;
     let cancelado = false;
     (async () => {
       try {
@@ -3729,7 +3715,10 @@ const VistaSupervisor = ({ t, currentUser }) => {
               : null
         );
         const pend = await actualizarVerificaciones();
-        if (!cancelado && pend && pend.length > 0) setMostrarVerif(true);
+        if (!cancelado) {
+          setVerificacionesListas(true);
+          if (pend?.length > 0) setMostrarVerif(true);
+        }
       } catch {
         if (!cancelado) setErrorAsignacion(true);
         // Error de RPC no equivale a ausencia de controles.
@@ -4030,8 +4019,8 @@ const VistaSupervisor = ({ t, currentUser }) => {
             await actualizarVerificaciones();
           }}
           onDone={async () => {
-            const pend = await actualizarVerificaciones();
-            if (pend) setMostrarVerif(false);
+            setMostrarVerif(false);
+            await actualizarVerificaciones();
           }}
         />
       )}
@@ -4128,7 +4117,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
           tone="success" />
       </div>
 
-      <Card t={t} padding={20} style={{
+      {puedeVerificar && <Card t={t} padding={20} style={{
         marginBottom: 24,
         ...(verifPendientes.length > 0 ? { borderColor: t.warn + '60', background: t.warnSoft } : {})
       }}>
@@ -4139,9 +4128,11 @@ const VistaSupervisor = ({ t, currentUser }) => {
               Verificaciones físicas aleatorias
             </div>
             <div style={{ fontFamily: 'Manrope', fontSize: 12, color: t.textMuted }}>
-              {verifPendientes.length > 0
-                ? `Tenés ${verifPendientes.length} ${verifPendientes.length === 1 ? 'prueba del turno anterior' : 'pruebas del turno anterior'} por corroborar físicamente en el almacén.`
-                : 'No hay verificaciones pendientes. El sistema asigna 2 pruebas al azar del turno anterior al iniciar cada turno.'}
+              {errorVerificaciones || errorAsignacion
+                ? 'Estado del control aleatorio sin confirmar.'
+                : verifPendientes.length > 0
+                  ? `Tenés ${verifPendientes.length} ${verifPendientes.length === 1 ? 'prueba' : 'pruebas'} por corroborar físicamente en el almacén.`
+                  : verificacionesListas ? 'No hay verificaciones pendientes para tu usuario.' : 'Consultando el control aleatorio…'}
             </div>
           </div>
           {verifPendientes.length > 0 ? (
@@ -4153,10 +4144,11 @@ const VistaSupervisor = ({ t, currentUser }) => {
               Verificar ahora ({verifPendientes.length})
             </button>
           ) : (
-            <Pill variant="success" t={t} mono>AL DÍA</Pill>
+            verificacionesListas && !errorVerificaciones && !errorAsignacion &&
+              <Pill variant="success" t={t} mono>AL DÍA</Pill>
           )}
         </div>
-      </Card>
+      </Card>}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginBottom: 24 }}>
         <Card t={t} padding={20}>

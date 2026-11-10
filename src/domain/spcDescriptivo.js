@@ -11,7 +11,7 @@ const idDe = p => {
   const id = p?.supabase_id ?? p?.id;
   return cadena(id) ? id : null;
 };
-const esEnsayo = p => !['PENDIENTE', 'ANULADA', 'ANULADO', 'CANCELADA'].includes(p?.estadoFinal) &&
+const esEnsayo = p => p.anulada === false && !['PENDIENTE', 'ANULADA', 'ANULADO', 'CANCELADA'].includes(p?.estadoFinal) &&
   (p?.estado === 'OK' || p?.estado === 'RECHAZADO');
 
 function categorizarMuestra(p) {

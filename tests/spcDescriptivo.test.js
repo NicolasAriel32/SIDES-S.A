@@ -5,7 +5,7 @@ import { MAQUINA_PILOTO_SPC, resumirSpcPiloto } from '../src/domain/spcDescripti
 const base = (x = {}) => ({
   supabase_id: 'uuid-1', maquina: MAQUINA_PILOTO_SPC,
   codigoProducto: 'RCE-310C-CE', estado: 'RECHAZADO',
-  estadoFinal: 'PENDIENTE_APROBACION', aptitudSpc: 'VALIDADO',
+  estadoFinal: 'PENDIENTE_APROBACION', anulada: false, aptitudSpc: 'VALIDADO',
   cabezalesInspeccionados: 20, cabezalesFalla: 3,
   tipos: ['EST', 'CLV'], cantidadesTipos: { EST: 2, CLV: 2 },
   timestamp: '2026-11-05T14:00:00Z', ...x,
@@ -102,4 +102,10 @@ test('entrada inválida es tolerada y no se atribuyen resultados', () => {
   assert.equal(resumirSpcPiloto(null).registrosRecuperados, 0);
   assert.equal(resumirSpcPiloto('no array').muestrasAptas, 0);
   assert.equal(resumirSpcPiloto([null, undefined, 5, {}]).registrosRecuperados, 0);
+});
+
+test('si la anulación es desconocida no se computa la muestra', () => {
+  const r = resumirSpcPiloto([base({ anulada: null }), base({ supabase_id: 'uuid-2', anulada: undefined })]);
+  assert.equal(r.pendientesONoEnsayos, 2);
+  assert.equal(r.muestrasAptas, 0);
 });

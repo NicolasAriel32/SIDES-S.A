@@ -10,7 +10,7 @@ const HASTA = '2026-11-06T00:00:00Z';
 const registro = (id, extra = {}) => ({
   id, id_maquina: 'MAQ-010', created_at: '2026-11-05T12:00:00',
   codigo_producto: 'RCE-310C-CE',
-  resultado: 'OK', estado_final: 'APROBADA',
+  resultado: 'OK', estado_final: 'APROBADA', anulada: false,
   cantidad_cabezales_afectados: 0,
   spc_cabezales_inspeccionados: 20,
   spc_uso_estadistico: 'NO_VALIDADO',
@@ -142,10 +142,10 @@ test('no convierte NULL de cabezales defectuosos en 0 válido', () => {
   assert.equal(r.muestrasAptas, 0);
 });
 
-test('un registro ANULADA no participa aunque tenga datos completos', () => {
+test('la bandera anulada prevalece aunque el estado final siga APROBADA', () => {
   const n = normalizarPruebaSpc(registro('a', {
     created_at: '2026-11-05T12:00:00Z',
-    estado_final: 'ANULADA',
+    anulada: true,
     spc_uso_estadistico: 'VALIDADO',
   }));
   const r = resumirSpcPiloto([n]);

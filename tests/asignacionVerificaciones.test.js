@@ -96,3 +96,15 @@ test('el frontend no vuelve a insertar asignaciones directamente',()=>{
   assert.doesNotMatch(app,/\.from\(['"]verificaciones_fisicas['"]\)\s*\.insert\(/);
   assert.doesNotMatch(app,/seleccionarVerificacionesAleatorias\(pruebasTurno/);
 });
+
+test('el sorteo excluye ensayos que el cierre de contramuestra no puede evaluar', () => {
+  const sql = readFileSync(new URL('../sql/VF_002_ASIGNACION_ATOMICA_NO_APLICAR.sql', import.meta.url), 'utf8');
+  const candidatos = sql.slice(sql.indexOf('SELECT p.id,p.numero_secuencial'), sql.indexOf('ORDER BY pg_catalog.random()'));
+  assert.match(candidatos, /p\.resultado IN \('OK','RECHAZADO'\)/);
+  assert.match(candidatos, /p\.estado_final NOT IN \([^)]*'PENDIENTE'/);
+  assert.ok(candidatos.includes("NULLIF(btrim(p.estado_final::text),'') IS NOT NULL"));
+  for (const campo of ['numero_caja', 'numero_lote']) {
+    assert.ok(candidatos.includes("NULLIF(btrim(p." + campo + "),'') IS NOT NULL"));
+  }
+  assert.match(candidatos, /cantidad_cabezales_afectados BETWEEN 1 AND 20/);
+});

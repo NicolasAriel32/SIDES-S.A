@@ -24,7 +24,7 @@ Fecha: 2026-11-06. Estado: análisis técnico y mejora acotada, **sin despliegue
   distribución física de cabezales con y sin defectos según registro.
 - La cantidad de selecciones sigue en **2** por conservar el comportamiento
   existente; Planta no fijó una cantidad nueva.
-- La selección server-side parte de pruebas digitales no anuladas del
+- La selección server-side parte de ensayos digitales no anulados con datos suficientes para el cierre VF-001, del
   turno anterior y asigna identificadores de prueba al encargado autenticado.
   La comprobación física queda trazada por VF-001 (borrador de cierre).
   La asignación VF-002 ya está escrita como contrato SQL **no ejecutado**.

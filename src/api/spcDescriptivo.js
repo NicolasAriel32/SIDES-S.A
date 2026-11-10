@@ -12,7 +12,7 @@ export const MAX_FILAS_SPC = 2000;
 
 const COLUMNAS = [
   'id', 'id_maquina', 'created_at', 'codigo_producto',
-  'resultado', 'estado_final', 'cantidad_cabezales_afectados',
+  'resultado', 'estado_final', 'anulada', 'cantidad_cabezales_afectados',
   'spc_cabezales_inspeccionados', 'spc_uso_estadistico',
   'spc_origen_evento', 'fallas:pruebas_fallas(tipo_falla_id,cantidad_items_afectados)',
 ].join(',');
@@ -35,6 +35,7 @@ export function normalizarPruebaSpc(row) {
     codigoProducto: row.codigo_producto,
     estado: row.resultado,
     estadoFinal: row.estado_final,
+    anulada: row.anulada,
     cabezalesInspeccionados: row.spc_cabezales_inspeccionados,
     cabezalesFalla: row.cantidad_cabezales_afectados,
     aptitudSpc: row.spc_uso_estadistico,
