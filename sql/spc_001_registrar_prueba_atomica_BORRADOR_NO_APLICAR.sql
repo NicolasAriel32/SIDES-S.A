@@ -1,5 +1,4 @@
 -- SIDES-SPC-001 | BORRADOR DE MIGRACIÓN - NO EJECUTAR SOBRE PRODUCCIÓN
--- Esta migración sólo existe en feature/spc-001-fase1-integridad-ui.
 -- Los registros anteriores permanecen intactos: columnas nuevas NULL para históricos.
 -- Requiere backup verificado, ambiente aislado, revisión OT/Calidad/Seguridad y autorización.
 BEGIN;
@@ -77,7 +76,7 @@ BEGIN
     INTO v_actor_rol, v_actor_legajo, v_actor_maquina
     FROM public.usuarios u
    WHERE u.id = auth.uid() AND u.activo = true;
-  IF NOT FOUND OR v_actor_rol NOT IN ('operario','supervisor','inspector','admin') THEN
+  IF NOT FOUND OR v_actor_rol IS NULL OR v_actor_rol NOT IN ('operario','supervisor','inspector','admin') THEN
     RAISE EXCEPTION 'Usuario no autorizado para registrar pruebas de estanqueidad';
   END IF;
 
@@ -120,7 +119,9 @@ BEGIN
   END IF;
 
   IF v_auto THEN
-    IF v_estado <> 'PENDIENTE' OR v_n <> 0 OR jsonb_array_length(v_tipos) <> 0 OR v_claves <> 0 THEN
+    IF v_estado IS DISTINCT FROM 'PENDIENTE' OR v_n <> 0
+       OR jsonb_array_length(v_tipos) <> 0 OR v_claves <> 0
+       OR v_producto IS NOT NULL OR v_caja IS NOT NULL OR v_lote IS NOT NULL THEN
       RAISE EXCEPTION 'Un pendiente automático no contiene datos de un ensayo realizado';
     END IF;
   ELSIF v_estado = 'OK' THEN

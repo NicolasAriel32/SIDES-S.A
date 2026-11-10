@@ -731,11 +731,6 @@ const dataService = {
     })
   },
 
-  async saveTests(tests) {
-    // No se usa — usamos createTest y updateTest directamente
-    throw new Error('saveTests no implementado — usar createTest/updateTest')
-  },
-
   async createTest(test) {
     const validez = validarResultadoEstanqueidad({
       estado: test.estado, tipos: test.tipos, cabezalesFalla: test.cabezalesFalla,
@@ -775,61 +770,6 @@ const dataService = {
     }
     return { ...test, id: codigoHumano, supabase_id: data.prueba_id,
              numeroSecuencial: data.numero_secuencial, repetido: data.duplicado === true };
-  },
-
-  // Actualiza una prueba. Se busca por código humano (PRB-...) o supabase_id (uuid).
-  // Acepta updates con la API del modelo interno.
-  async updateTest(codigoOSupabaseId, updates) {
-    // El modelo interno del front pasa el código humano, pero también puede pasar uuid
-    let pruebaUuid = codigoOSupabaseId
-    if (!/^[0-9a-f-]{36}$/i.test(codigoOSupabaseId)) {
-      // Es código humano, hay que resolver el uuid via numero_secuencial
-      const numero = parseInt(codigoOSupabaseId.split('-').pop(), 10)
-      if (!Number.isNaN(numero)) {
-        const { data: row } = await supabase
-          .from('pruebas')
-          .select('id')
-          .eq('numero_secuencial', numero)
-          .maybeSingle()
-        pruebaUuid = row?.id
-      }
-    }
-    if (!pruebaUuid) {
-      console.error('updateTest: no se pudo resolver el uuid de la prueba', { codigoOSupabaseId })
-      return { id: codigoOSupabaseId, ...updates }
-    }
-
-    // Mapeo de updates del modelo interno → schema real
-    const supabaseUpdates = {}
-    if (updates.esperandoAprobacion === false && updates.aprobado === true) {
-      supabaseUpdates.estado_final      = 'APROBADA'
-      supabaseUpdates.timestamp_aprobada = new Date().toISOString()
-      // Si el caller no pasó supervisorLegajo, lo tomamos del sessionStorage
-      if (!updates.supervisorLegajo) {
-        try {
-          const cur = JSON.parse(sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER) || 'null')
-          if (cur?.legajo) supabaseUpdates.supervisor_legajo = cur.legajo
-        } catch {}
-      }
-    }
-    if (updates.esperandoAprobacion === true) {
-      supabaseUpdates.estado_final = 'PENDIENTE_APROBACION'
-      supabaseUpdates.tuvo_falla = true
-      if (updates.estado === undefined) supabaseUpdates.resultado = 'RECHAZADO'
-    }
-    if (updates.estadoFinal !== undefined) supabaseUpdates.estado_final = updates.estadoFinal
-    if (updates.tuvoFalla !== undefined) supabaseUpdates.tuvo_falla = updates.tuvoFalla
-    if (updates.estado !== undefined) supabaseUpdates.resultado         = updates.estado
-    if (updates.supervisorLegajo)     supabaseUpdates.supervisor_legajo = updates.supervisorLegajo
-
-    const { data, error } = await supabase
-      .from('pruebas')
-      .update(supabaseUpdates)
-      .eq('id', pruebaUuid)
-
-    console.log('updateTest supabase response:', { pruebaUuid, supabaseUpdates, data, error })
-    if (error) { console.error('updateTest:', error) }
-    return { id: codigoOSupabaseId, supabase_id: pruebaUuid, ...updates }
   },
 
   // ===== AUDIT LOG =====
@@ -3864,14 +3804,9 @@ const VistaSupervisor = ({ t, currentUser }) => {
     return true
   }
 
-  const enviarAColaDeAprobacion = async () => {
-    if (!alertaFalla?.id) return;
-    await dataService.updateTest(alertaFalla.id, {
-      estado: 'RECHAZADO',
-      estadoFinal: 'PENDIENTE_APROBACION',
-      esperandoAprobacion: true,
-      tuvoFalla: true
-    });
+  const abrirColaDeAprobacion = () => {
+    // La RPC de registro ya deja la falla en cola. Un aviso antiguo
+    // no debe reabrir una prueba que otro supervisor ya resolvió.
     setTabActiva('turno');
     setAlertaFalla(null);
     reload();
@@ -3982,7 +3917,7 @@ const VistaSupervisor = ({ t, currentUser }) => {
                 "{alertaFalla.observaciones}"
               </div>
             )}
-            <button onClick={enviarAColaDeAprobacion} style={{
+            <button onClick={abrirColaDeAprobacion} style={{
               width: '100%', marginTop: 12, padding: 10, background: t.danger, color: t.bg,
               border: 'none', borderRadius: 6, cursor: 'pointer',
               fontFamily: 'Bricolage Grotesque', fontSize: 13, fontWeight: 600

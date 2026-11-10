@@ -42,3 +42,8 @@ test('RPC pública es invoker y función privilegiada no está expuesta por Data
   assert.match(sql, /v_actor_maquina IS DISTINCT FROM v_maquina/);
   assert.match(sql, /extensions\.digest\(p::text,'sha256'\)/);
 });
+
+test('un rol nulo y un pendiente automático con datos de ensayo se rechazan', () => {
+  assert.match(sql, /IF NOT FOUND OR v_actor_rol IS NULL OR v_actor_rol NOT IN/);
+  assert.match(sql, /IF v_estado IS DISTINCT FROM 'PENDIENTE'[\s\S]+?OR v_producto IS NOT NULL OR v_caja IS NOT NULL OR v_lote IS NOT NULL THEN\s+RAISE EXCEPTION/);
+});

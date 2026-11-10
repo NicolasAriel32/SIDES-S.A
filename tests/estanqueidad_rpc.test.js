@@ -62,3 +62,11 @@ test('el error de la RPC llega al llamador para conservar señal local', async (
   assert.equal(result.data, null);
   assert.equal(result.error.message, 'red desconectada');
 });
+
+test('el envío automático exige un resultado pendiente y no convierte un ensayo realizado', async () => {
+  const cliente = { rpc: async () => assert.fail('No debe llamar a la RPC') };
+  await assert.rejects(registrarPruebaEstanqueidad(cliente, { ...base, autoPendiente: true }), /pendiente automático/i);
+  await assert.rejects(registrarPruebaEstanqueidad(cliente, {
+    ...base, estado: 'OK', autoPendiente: true, cabezalesFalla: 0, tipos: [], cantidadesTipos: {},
+  }), /pendiente automático/i);
+});
