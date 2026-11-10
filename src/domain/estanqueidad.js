@@ -9,8 +9,8 @@ const correcto = () => ({ ok: true, mensaje: null });
 export function validarResultadoEstanqueidad({
   estado, tipos = [], cabezalesFalla = 0, cantidadesTipos = {}, autoPendiente = false,
 }) {
-  if (autoPendiente === true && estado === 'PENDIENTE') {
-    return Number(cabezalesFalla) === 0 &&
+  if (autoPendiente === true) {
+    return estado === 'PENDIENTE' && Number(cabezalesFalla) === 0 &&
       Array.isArray(tipos) && tipos.length === 0 &&
       cantidadesTipos && Object.keys(cantidadesTipos).length === 0
       ? correcto() : fallo('Un pendiente automático no representa una prueba realizada.');
